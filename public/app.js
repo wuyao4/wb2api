@@ -6,6 +6,8 @@ const state = {
   lastServerKey: '',
   modelTouched: false,
   contextTouched: false,
+  modelSelect: null,
+  contextSelect: null,
   logsSignature: '',
   statusErrorShown: false
 };
@@ -168,6 +170,300 @@ async function copyText(text) {
 }
 
 // ---------------------------------------------------------------------------
+// custom select
+// ---------------------------------------------------------------------------
+
+class CustomSelect {
+  constructor(element, { searchable = false, onChange = () => {} } = {}) {
+    this.el = element;
+    this.searchable = searchable;
+    this.onChange = onChange;
+    this.options = [];
+    this.value = '';
+    this.disabled = false;
+    this.open = false;
+    this.active = -1;
+    this.filtered = [];
+    this.query = '';
+    this.build();
+  }
+
+  build() {
+    this.el.classList.add('cselect');
+    this.el.replaceChildren();
+
+    this.trigger = document.createElement('button');
+    this.trigger.type = 'button';
+    this.trigger.className = 'cselect-trigger';
+    this.trigger.setAttribute('aria-haspopup', 'listbox');
+    this.trigger.setAttribute('aria-expanded', 'false');
+    this.trigger.innerHTML = `
+      <span class="cselect-value"><span class="t"></span><span class="s"></span></span>
+      <svg class="cselect-chevron" viewBox="0 0 12 8" fill="none" aria-hidden="true">
+        <path d="M1 1.5 6 6.5 11 1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>`;
+    this.el.appendChild(this.trigger);
+
+    this.popover = document.createElement('div');
+    this.popover.className = 'cselect-popover';
+    this.popover.hidden = true;
+    this.popover.tabIndex = -1;
+
+    if (this.searchable) {
+      this.search = document.createElement('input');
+      this.search.className = 'cselect-search';
+      this.search.placeholder = '搜索模型…';
+      this.search.autocomplete = 'off';
+      this.search.spellcheck = false;
+      this.search.setAttribute('aria-label', '搜索模型');
+      this.popover.appendChild(this.search);
+    }
+
+    this.list = document.createElement('div');
+    this.list.className = 'cselect-list';
+    this.list.setAttribute('role', 'listbox');
+    this.list.tabIndex = -1;
+    this.popover.appendChild(this.list);
+    this.el.appendChild(this.popover);
+
+    this.trigger.addEventListener('click', () => this.toggle());
+    this.trigger.addEventListener('keydown', (event) => {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
+        event.preventDefault();
+        this.openMenu();
+      }
+    });
+
+    this.popover.addEventListener('focusout', (event) => {
+      if (!this.el.contains(event.relatedTarget)) this.closeMenu(false);
+    });
+
+    if (this.search) {
+      this.search.addEventListener('input', () => {
+        this.query = this.search.value;
+        this.active = 0;
+        this.renderOptions();
+      });
+      this.search.addEventListener('keydown', (event) => this.handleKey(event));
+    } else {
+      this.popover.addEventListener('keydown', (event) => this.handleKey(event));
+    }
+
+    document.addEventListener('click', (event) => {
+      if (!this.el.contains(event.target)) this.closeMenu(false);
+    });
+
+    this.renderLabel();
+  }
+
+  setOptions(options) {
+    this.options = Array.isArray(options) ? options.slice() : [];
+    if (!this.options.some((option) => option.value === this.value)) {
+      this.value = this.options[0]?.value ?? '';
+    }
+    this.renderLabel();
+    if (this.open) {
+      this.query = '';
+      if (this.search) this.search.value = '';
+      this.active = -1;
+      this.renderOptions();
+    }
+  }
+
+  setValue(value) {
+    const next = String(value ?? '');
+    if (!this.options.some((option) => option.value === next)) return false;
+    this.value = next;
+    this.renderLabel();
+    return true;
+  }
+
+  getValue() {
+    return this.value;
+  }
+
+  hasValue(value) {
+    return this.options.some((option) => option.value === String(value));
+  }
+
+  hasOptions() {
+    return this.options.length > 0;
+  }
+
+  setDisabled(disabled) {
+    this.disabled = !!disabled;
+    this.trigger.disabled = this.disabled;
+    if (this.disabled) this.closeMenu(false);
+  }
+
+  renderLabel() {
+    const option = this.options.find((item) => item.value === this.value);
+    const title = this.trigger.querySelector('.t');
+    const subtitle = this.trigger.querySelector('.s');
+    title.textContent = option ? option.label : this.el.dataset.placeholder || '请选择';
+    subtitle.textContent = option?.description || '';
+    this.trigger.title = option ? [option.label, option.description].filter(Boolean).join(' · ') : '';
+  }
+
+  toggle() {
+    if (this.open) this.closeMenu();
+    else this.openMenu();
+  }
+
+  openMenu() {
+    if (this.disabled || this.open) return;
+    this.open = true;
+    this.popover.hidden = false;
+    this.popover.classList.remove('is-up');
+    this.trigger.setAttribute('aria-expanded', 'true');
+    this.query = '';
+    if (this.search) this.search.value = '';
+    this.active = -1;
+    this.renderOptions();
+
+    const rect = this.trigger.getBoundingClientRect();
+    const popoverHeight = this.popover.offsetHeight;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow < popoverHeight + 12 && rect.top > popoverHeight + 12) {
+      this.popover.classList.add('is-up');
+    }
+
+    requestAnimationFrame(() => {
+      if (this.search) this.search.focus();
+      else this.popover.focus({ preventScroll: true });
+      this.scrollActiveIntoView();
+    });
+  }
+
+  closeMenu(refocus = true) {
+    if (!this.open) return;
+    this.open = false;
+    this.popover.hidden = true;
+    this.trigger.setAttribute('aria-expanded', 'false');
+    if (refocus) this.trigger.focus({ preventScroll: true });
+  }
+
+  renderOptions() {
+    const query = this.query.trim().toLowerCase();
+    this.filtered = this.options.filter((option) => {
+      if (!query) return true;
+      const text = `${option.label} ${option.description || ''} ${option.searchText || ''}`.toLowerCase();
+      return text.includes(query);
+    });
+
+    this.list.replaceChildren();
+
+    if (!this.filtered.length) {
+      const empty = document.createElement('div');
+      empty.className = 'cselect-empty';
+      empty.textContent = '没有匹配项';
+      this.list.appendChild(empty);
+      this.active = -1;
+      return;
+    }
+
+    if (this.active < 0 || this.active >= this.filtered.length) {
+      const selected = this.filtered.findIndex((option) => option.value === this.value);
+      this.active = selected >= 0 ? selected : 0;
+    }
+
+    this.filtered.forEach((option, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'cselect-option';
+      button.tabIndex = -1;
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', option.value === this.value ? 'true' : 'false');
+      button.classList.toggle('is-selected', option.value === this.value);
+      button.classList.toggle('is-active', index === this.active);
+
+      const text = document.createElement('span');
+      text.className = 'opt-text';
+      const name = document.createElement('span');
+      name.className = 'opt-name';
+      name.textContent = option.label;
+      text.appendChild(name);
+      if (option.description) {
+        const meta = document.createElement('span');
+        meta.className = 'opt-meta';
+        meta.textContent = option.description;
+        text.appendChild(meta);
+      }
+
+      const check = document.createElement('span');
+      check.className = 'check';
+      check.textContent = '✓';
+      button.append(text, check);
+
+      button.addEventListener('mouseenter', () => {
+        this.active = index;
+        this.updateActive();
+      });
+      button.addEventListener('click', () => this.selectOption(option));
+      this.list.appendChild(button);
+    });
+
+    this.scrollActiveIntoView();
+  }
+
+  selectOption(option) {
+    const changed = option.value !== this.value;
+    this.value = option.value;
+    this.renderLabel();
+    this.closeMenu();
+    if (changed) this.onChange(option.value);
+  }
+
+  handleKey(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.closeMenu();
+      return;
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!this.open) {
+        this.openMenu();
+        return;
+      }
+      if (!this.filtered.length) return;
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      this.active = (this.active + direction + this.filtered.length) % this.filtered.length;
+      this.updateActive();
+      return;
+    }
+
+    if (event.key === 'Home' || event.key === 'End') {
+      if (!this.open || !this.filtered.length) return;
+      event.preventDefault();
+      this.active = event.key === 'Home' ? 0 : this.filtered.length - 1;
+      this.updateActive();
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      if (!this.open) return;
+      event.preventDefault();
+      const option = this.filtered[this.active];
+      if (option) this.selectOption(option);
+    }
+  }
+
+  updateActive() {
+    this.list.querySelectorAll('.cselect-option').forEach((button, index) => {
+      button.classList.toggle('is-active', index === this.active);
+    });
+    this.scrollActiveIntoView();
+  }
+
+  scrollActiveIntoView() {
+    const node = this.list.querySelectorAll('.cselect-option')[this.active];
+    if (node) node.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // token preview
 // ---------------------------------------------------------------------------
 
@@ -282,32 +578,41 @@ function renderStatus() {
   state.lastServerKey = serverKey;
 
   // model select
-  const select = $('modelSelect');
-  if (s.defaultModel && !state.modelTouched && select.value !== s.defaultModel) {
-    select.value = s.defaultModel;
-    updateModelDescription();
-    state.contextTouched = false;
-    updateContextOptions();
-  }
-
-  if (!state.contextTouched && state.models.length) {
-    const contextSelect = $('contextSelect');
-    const selected = state.models.find((item) => item.id === $('modelSelect').value);
-    const contextKey = selected ? selected.root || selected.id : '';
-    const settings = s.models?.contextWindow || {};
-    const configuredContext = Number(settings.overrides?.[contextKey] ?? settings.default ?? 0);
+  const modelSelect = state.modelSelect;
+  if (modelSelect) {
     if (
-      configuredContext &&
-      contextSelect.value !== String(configuredContext) &&
-      [...contextSelect.options].some((option) => option.value === String(configuredContext))
+      s.defaultModel &&
+      !state.modelTouched &&
+      modelSelect.hasValue(s.defaultModel) &&
+      modelSelect.getValue() !== s.defaultModel
     ) {
-      contextSelect.value = String(configuredContext);
-      updateContextDescription();
+      modelSelect.setValue(s.defaultModel);
+      updateModelDescription();
+      state.contextTouched = false;
+      updateContextOptions();
     }
+    modelSelect.setDisabled(!configured || !state.models.length);
   }
 
-  select.disabled = !configured || !state.models.length;
-  $('contextSelect').disabled = !configured || !state.models.length || !$('contextSelect').options.length;
+  const contextSelect = state.contextSelect;
+  if (contextSelect) {
+    if (!state.contextTouched && state.models.length) {
+      const selected = state.models.find((item) => item.id === (modelSelect?.getValue() || ''));
+      const contextKey = selected ? selected.root || selected.id : '';
+      const settings = s.models?.contextWindow || {};
+      const configuredContext = Number(settings.overrides?.[contextKey] ?? settings.default ?? 0);
+      if (
+        configuredContext &&
+        contextSelect.getValue() !== String(configuredContext) &&
+        contextSelect.hasValue(String(configuredContext))
+      ) {
+        contextSelect.setValue(String(configuredContext));
+        updateContextDescription();
+      }
+    }
+    contextSelect.setDisabled(!configured || !state.models.length || !contextSelect.hasOptions());
+  }
+
   $('modelsBtn').disabled = !configured;
   $('startBtn').disabled = !configured || $('startBtn').classList.contains('is-busy');
   $('startBtn').querySelector('.btn-label').textContent = running ? '更新并应用' : '启动反代';
@@ -357,35 +662,33 @@ async function refreshStatus() {
 // ---------------------------------------------------------------------------
 
 function renderModels() {
-  const select = $('modelSelect');
-  const previous = state.status?.defaultModel || select.value;
-  select.replaceChildren();
+  const select = state.modelSelect;
+  if (!select) return;
 
   if (!state.models.length) {
-    const option = document.createElement('option');
-    option.textContent = '暂无模型';
-    option.value = '';
-    select.appendChild(option);
-    select.disabled = true;
+    select.setOptions([]);
+    select.setDisabled(true);
     return;
   }
 
-  for (const model of state.models) {
-    const option = document.createElement('option');
-    option.value = model.id;
-    option.textContent = model.name && model.name !== model.id ? `${model.name} · ${model.id}` : model.id;
-    select.appendChild(option);
-  }
+  select.setOptions(
+    state.models.map((model) => ({
+      value: model.id,
+      label: model.name && model.name !== model.id ? model.name : model.id,
+      description: model.name && model.name !== model.id ? model.id : '',
+      searchText: `${model.id} ${model.name || ''} ${model.root || ''}`
+    }))
+  );
 
-  if (previous && state.models.some((model) => model.id === previous)) {
-    select.value = previous;
-  } else {
-    select.value = state.models[0].id;
+  const preferred = state.status?.defaultModel;
+  if (!state.modelTouched && preferred && select.hasValue(preferred)) {
+    select.setValue(preferred);
   }
 
   if (state.status) {
-    select.disabled = !(state.status.user || state.status.token?.expiresAt);
-    $('modelsBtn').disabled = select.disabled;
+    const ready = !!(state.status.user || state.status.token?.expiresAt);
+    select.setDisabled(!ready);
+    $('modelsBtn').disabled = !ready;
   }
 
   renderModelChips();
@@ -403,19 +706,23 @@ function renderModelChips() {
     'glm-5.3-flash',
     'gpt-5.6-luna'
   ];
-  const select = $('modelSelect');
+  const select = state.modelSelect;
+  const current = select?.getValue();
   for (const id of popular) {
     const model = state.models.find((item) => item.id === id);
     if (!model) continue;
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `model-chip${select.value === id ? ' is-active' : ''}`;
+    button.className = `model-chip${current === id ? ' is-active' : ''}`;
     button.textContent = id;
     button.title = model.name || id;
     button.addEventListener('click', () => {
-      select.value = id;
+      if (!select) return;
+      select.setValue(id);
       state.modelTouched = true;
+      state.contextTouched = false;
       updateModelDescription();
+      updateContextOptions();
       renderModelChips();
     });
     row.appendChild(button);
@@ -423,11 +730,10 @@ function renderModelChips() {
 }
 
 function updateModelDescription() {
-  const select = $('modelSelect');
-  const model = state.models.find((item) => item.id === select.value);
+  const model = state.models.find((item) => item.id === state.modelSelect?.getValue());
   const desc = $('modelDesc');
   if (!model) {
-    desc.textContent = '—';
+    desc.textContent = '保存凭据后加载模型列表';
     return;
   }
   const parts = [];
@@ -443,17 +749,14 @@ function updateModelDescription() {
 }
 
 function updateContextOptions() {
-  const select = $('contextSelect');
-  const previous = Number(select.value) || 0;
-  const model = state.models.find((item) => item.id === $('modelSelect').value);
-  select.replaceChildren();
+  const select = state.contextSelect;
+  if (!select) return;
+  const previous = Number(select.getValue()) || 0;
+  const model = state.models.find((item) => item.id === state.modelSelect?.getValue());
 
   if (!model) {
-    const option = document.createElement('option');
-    option.textContent = '暂无可用模型';
-    option.value = '';
-    select.appendChild(option);
-    select.disabled = true;
+    select.setOptions([]);
+    select.setDisabled(true);
     updateContextDescription();
     return;
   }
@@ -469,14 +772,18 @@ function updateContextOptions() {
       : [];
 
   if (!values.length) {
-    const option = document.createElement('option');
-    option.textContent = '模型未声明';
-    option.value = '';
-    select.appendChild(option);
-    select.disabled = true;
+    select.setOptions([]);
+    select.setDisabled(true);
     updateContextDescription();
     return;
   }
+
+  select.setOptions(
+    values.map((value) => ({
+      value: String(value),
+      label: formatContext(value)
+    }))
+  );
 
   const configuredContextWindow = state.status?.models?.contextWindow || {};
   const contextKey = model.root || model.id;
@@ -484,28 +791,21 @@ function updateContextOptions() {
     configuredContextWindow.overrides?.[contextKey] ?? configuredContextWindow.default ?? 0
   );
   const desired =
-    state.contextTouched && values.includes(previous)
-      ? previous
-      : values.includes(configured)
-        ? configured
-        : values[values.length - 1];
+    state.contextTouched && select.hasValue(String(previous))
+      ? String(previous)
+      : select.hasValue(String(configured))
+        ? String(configured)
+        : String(values[values.length - 1]);
 
-  for (const value of values) {
-    const option = document.createElement('option');
-    option.value = String(value);
-    option.textContent = formatContext(value);
-    select.appendChild(option);
-  }
-
-  select.value = String(desired);
-  select.disabled = !(state.status?.user || state.status?.token?.expiresAt);
+  select.setValue(desired);
+  select.setDisabled(!(state.status?.user || state.status?.token?.expiresAt));
   updateContextDescription();
 }
 
 function updateContextDescription() {
   const desc = $('contextDesc');
-  const model = state.models.find((item) => item.id === $('modelSelect').value);
-  const selected = Number($('contextSelect').value) || 0;
+  const model = state.models.find((item) => item.id === state.modelSelect?.getValue());
+  const selected = Number(state.contextSelect?.getValue()) || 0;
   if (!model || !selected) {
     desc.textContent = '用于向客户端声明可用上下文，代理不会截断请求';
     return;
@@ -587,7 +887,7 @@ async function generateKey(showToast = true) {
 
 async function startProxy() {
   const button = $('startBtn');
-  const defaultModel = $('modelSelect').value;
+  const defaultModel = state.modelSelect?.getValue();
   if (!defaultModel) {
     toast('请选择默认模型', 'error');
     return;
@@ -602,7 +902,7 @@ async function startProxy() {
       body: JSON.stringify({
         apiKey: $('keyInput').value.trim(),
         defaultModel,
-        contextWindow: Number($('contextSelect').value) || undefined
+        contextWindow: Number(state.contextSelect?.getValue()) || undefined
       })
     });
     $('keyInput').value = data.apiKey;
@@ -734,19 +1034,6 @@ function bind() {
   $('stopBtn').addEventListener('click', stopProxy);
   $('modelsBtn').addEventListener('click', () => loadModels(true));
 
-  $('modelSelect').addEventListener('change', () => {
-    state.modelTouched = true;
-    state.contextTouched = false;
-    updateModelDescription();
-    updateContextOptions();
-    renderModelChips();
-  });
-
-  $('contextSelect').addEventListener('change', () => {
-    state.contextTouched = true;
-    updateContextDescription();
-  });
-
   $('copySnippet').addEventListener('click', async () => {
     const ok = await copyText($('snippetText').textContent);
     toast(ok ? '示例已复制' : '复制失败', ok ? 'success' : 'error');
@@ -763,7 +1050,30 @@ function bind() {
   });
 }
 
+function initSelects() {
+  state.modelSelect = new CustomSelect($('modelSelect'), {
+    searchable: true,
+    onChange: () => {
+      state.modelTouched = true;
+      state.contextTouched = false;
+      updateModelDescription();
+      updateContextOptions();
+      renderModelChips();
+    }
+  });
+  state.modelSelect.setDisabled(true);
+
+  state.contextSelect = new CustomSelect($('contextSelect'), {
+    onChange: () => {
+      state.contextTouched = true;
+      updateContextDescription();
+    }
+  });
+  state.contextSelect.setDisabled(true);
+}
+
 async function init() {
+  initSelects();
   bind();
   updateTokenPreview();
   await refreshStatus();

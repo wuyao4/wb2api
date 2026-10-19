@@ -9,12 +9,6 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <div class="ambient" aria-hidden="true">
-      <span class="orb orb-a"></span>
-      <span class="orb orb-b"></span>
-      <span class="orb orb-c"></span>
-    </div>
-
     <header class="topbar">
       <div class="brand">
         <div class="logo" aria-hidden="true">
@@ -39,9 +33,8 @@
 
     <main class="shell">
       <section class="hero">
-        <span class="hero-badge">LOCAL GATEWAY</span>
-        <h2>把 WorkBuddy 变成你自己的 <em>API</em></h2>
-        <p>粘贴 token，一键启动。生成专属反代地址与密钥，OpenAI / Claude 客户端即插即用。</p>
+        <h2>把 WorkBuddy 变成你自己的 API</h2>
+        <p>连接账号，启动兼容 OpenAI / Anthropic 的本地网关。</p>
       </section>
 
       <div class="layout">
@@ -108,19 +101,15 @@
 
             <label class="field-label" for="modelSelect">默认模型</label>
             <div class="model-row">
-              <select id="modelSelect" disabled>
-                <option>请先保存凭据</option>
-              </select>
+              <div id="modelSelect" class="cselect" data-placeholder="请先保存凭据"></div>
               <button class="ghost mini" id="modelsBtn" type="button" disabled>刷新</button>
             </div>
-            <div class="model-desc" id="modelDesc">—</div>
+            <div class="model-desc" id="modelDesc">保存凭据后加载模型列表</div>
             <div class="chip-row" id="modelChips"></div>
 
             <label class="field-label" for="contextSelect">上下文窗口</label>
             <div class="model-row">
-              <select id="contextSelect" disabled>
-                <option>请先保存凭据</option>
-              </select>
+              <div id="contextSelect" class="cselect" data-placeholder="请先保存凭据"></div>
             </div>
             <div class="model-desc" id="contextDesc">用于向客户端声明可用上下文，代理不会截断请求</div>
 
@@ -150,7 +139,6 @@
               </div>
               <h3>等待启动</h3>
               <p>保存凭据后点击启动，这里会生成专属反代地址与 API Key。</p>
-              <div class="wire" aria-hidden="true"><span></span><span></span><span></span></div>
             </div>
 
             <div class="output-live" id="outputLive" hidden>
