@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WorkBuddy2API · 控制台</title>
+    <meta name="description" content="把 WorkBuddy 变成你自己的 OpenAI / Anthropic 兼容 API" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="ambient" aria-hidden="true">
+      <span class="orb orb-a"></span>
+      <span class="orb orb-b"></span>
+      <span class="orb orb-c"></span>
+    </div>
+
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h6a3 3 0 0 1 3 3v4a3 3 0 0 0 3 3h4" />
+            <path d="M17 14l3 3-3 3" />
+            <circle cx="4" cy="7" r="1.6" fill="currentColor" stroke="none" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>WorkBuddy<span>2API</span></h1>
+          <p>OpenAI · Anthropic 兼容反代</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="status-pill" id="statusPill" data-state="idle">
+          <span class="pill-dot"></span>
+          <span id="statusText">未配置</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="hero">
+        <span class="hero-badge">LOCAL GATEWAY</span>
+        <h2>把 WorkBuddy 变成你自己的 <em>API</em></h2>
+        <p>粘贴 token，一键启动。生成专属反代地址与密钥，OpenAI / Claude 客户端即插即用。</p>
+      </section>
+
+      <div class="layout">
+        <div class="column">
+          <section class="card step-card" id="cardCredentials">
+            <header class="card-head">
+              <span class="step-num">01</span>
+              <div class="card-title">
+                <h3>连接 WorkBuddy</h3>
+                <p>访问令牌 / 刷新令牌均可，自动识别</p>
+              </div>
+              <span class="head-state" id="credState">待填写</span>
+            </header>
+
+            <label class="field-label" for="tokenInput">WorkBuddy Token</label>
+            <div class="token-wrap">
+              <textarea
+                id="tokenInput"
+                spellcheck="false"
+                autocomplete="off"
+                autocapitalize="off"
+                placeholder="eyJhbGciOi...&#10;或 Authorization: Bearer eyJ...&#10;或 HAR / 请求头 JSON"
+              ></textarea>
+              <div class="token-tools">
+                <button class="ghost mini" id="pasteBtn" type="button">粘贴</button>
+                <button class="ghost mini" id="clearBtn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="field-hint" id="tokenHint">
+              支持 access token、refresh token、请求头文本或 JSON，服务端只从中提取凭据。
+            </div>
+            <div class="parsed" id="parsedChips" hidden></div>
+
+            <details class="advanced">
+              <summary>高级选项（可选）</summary>
+              <div class="advanced-grid">
+                <label>
+                  设备 Token
+                  <input id="deviceInput" spellcheck="false" autocomplete="off" placeholder="X-Device-Token，可留空" />
+                </label>
+                <label>
+                  用户 ID
+                  <input id="userInput" spellcheck="false" autocomplete="off" placeholder="X-User-Id，可留空" />
+                </label>
+              </div>
+            </details>
+
+            <button class="btn primary" id="saveBtn" type="button" disabled>
+              <span class="btn-label">验证并保存</span>
+              <span class="spinner" aria-hidden="true"></span>
+            </button>
+            <div class="inline-msg" id="credMsg" role="status"></div>
+          </section>
+
+          <section class="card step-card" id="cardStart">
+            <header class="card-head">
+              <span class="step-num">02</span>
+              <div class="card-title">
+                <h3>生成反代与密钥</h3>
+                <p>选择默认模型，启动本地网关</p>
+              </div>
+              <span class="head-state" id="startState">等待凭据</span>
+            </header>
+
+            <label class="field-label" for="modelSelect">默认模型</label>
+            <div class="model-row">
+              <select id="modelSelect" disabled>
+                <option>请先保存凭据</option>
+              </select>
+              <button class="ghost mini" id="modelsBtn" type="button" disabled>刷新</button>
+            </div>
+            <div class="model-desc" id="modelDesc">—</div>
+            <div class="chip-row" id="modelChips"></div>
+
+            <label class="field-label" for="contextSelect">上下文窗口</label>
+            <div class="model-row">
+              <select id="contextSelect" disabled>
+                <option>请先保存凭据</option>
+              </select>
+            </div>
+            <div class="model-desc" id="contextDesc">用于向客户端声明可用上下文，代理不会截断请求</div>
+
+            <label class="field-label" for="keyInput">API Key</label>
+            <div class="key-row">
+              <input id="keyInput" spellcheck="false" autocomplete="off" placeholder="留空则在启动时自动生成" />
+              <button class="ghost mini" id="genKeyBtn" type="button">生成</button>
+            </div>
+
+            <button class="btn primary" id="startBtn" type="button" disabled>
+              <span class="btn-label">启动反代</span>
+              <span class="spinner" aria-hidden="true"></span>
+            </button>
+            <div class="inline-msg" id="startMsg" role="status"></div>
+          </section>
+        </div>
+
+        <div class="column">
+          <section class="card output-card" id="cardOutput">
+            <div class="output-empty" id="outputEmpty">
+              <div class="lock-badge" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                  <rect x="4" y="10" width="16" height="10" rx="3" />
+                  <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                  <circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none" />
+                </svg>
+              </div>
+              <h3>等待启动</h3>
+              <p>保存凭据后点击启动，这里会生成专属反代地址与 API Key。</p>
+              <div class="wire" aria-hidden="true"><span></span><span></span><span></span></div>
+            </div>
+
+            <div class="output-live" id="outputLive" hidden>
+              <header class="output-head">
+                <div class="live-title">
+                  <span class="live-dot" aria-hidden="true"></span>
+                  <div>
+                    <h3>反代已就绪</h3>
+                    <p id="readyMeta">OpenAI / Anthropic 兼容端点</p>
+                  </div>
+                </div>
+                <button class="ghost danger" id="stopBtn" type="button">停止</button>
+              </header>
+
+              <div class="endpoint">
+                <div class="endpoint-meta">
+                  <span>BASE URL</span>
+                  <button class="ghost mini" type="button" data-copy="base">复制</button>
+                </div>
+                <code id="baseUrlText">—</code>
+              </div>
+
+              <div class="endpoint">
+                <div class="endpoint-meta">
+                  <span>API KEY</span>
+                  <span class="endpoint-actions">
+                    <button class="ghost mini" id="regenBtn" type="button">重新生成</button>
+                    <button class="ghost mini" type="button" data-copy="key">复制</button>
+                  </span>
+                </div>
+                <code id="apiKeyText">—</code>
+              </div>
+
+              <div class="compat-row">
+                <span class="tag">OpenAI</span>
+                <span class="tag">Anthropic</span>
+                <span class="tag">Streaming</span>
+                <span class="tag">Tools</span>
+              </div>
+
+              <details class="snippet">
+                <summary>查看调用示例</summary>
+                <pre id="snippetText"></pre>
+                <button class="ghost mini" id="copySnippet" type="button">复制示例</button>
+              </details>
+            </div>
+          </section>
+
+          <section class="card stats-card">
+            <div class="stats-head">
+              <div>
+                <h3>运行概览</h3>
+                <p id="userLine">未连接账号</p>
+              </div>
+              <div class="expiry" id="expiryLine">—</div>
+            </div>
+            <div class="stats-grid">
+              <div class="stat">
+                <span>请求数</span>
+                <strong id="statRequests">0</strong>
+              </div>
+              <div class="stat">
+                <span>输入 Tokens</span>
+                <strong id="statPrompt">0</strong>
+              </div>
+              <div class="stat">
+                <span>输出 Tokens</span>
+                <strong id="statCompletion">0</strong>
+              </div>
+              <div class="stat">
+                <span>运行时长</span>
+                <strong id="statUptime">—</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="card logs-card">
+            <header class="card-head compact">
+              <div class="card-title">
+                <h3>实时请求</h3>
+                <p>最近 60 条 · 每 4 秒刷新</p>
+              </div>
+              <span class="refresh-hint"><span></span>LIVE</span>
+            </header>
+            <div class="log-list" id="logList">
+              <div class="log-empty">暂无请求，启动后在这里查看调用记录</div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <span>凭据仅保存在本机 <code>config.json</code></span>
+        <span class="footer-dot"></span>
+        <span>WorkBuddy2API</span>
+      </footer>
+    </main>
+
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

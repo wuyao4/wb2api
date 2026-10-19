@@ -1,0 +1,17 @@
+{
+  "name": "workbuddy2api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI / Anthropic compatible reverse proxy for WorkBuddy (www.workbuddy.ai) models",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "refresh": "node bin/refresh.js",
+    "setup": "node bin/setup.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

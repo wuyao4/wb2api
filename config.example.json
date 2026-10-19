@@ -1,0 +1,60 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "apiKeys": [
+      "sk-wb2api-local"
+    ],
+    "requestBodyLimitMb": 128,
+    "adminToken": "",
+    "running": false
+  },
+  "upstream": {
+    "baseUrl": "https://www.workbuddy.ai",
+    "accessToken": "",
+    "refreshToken": "",
+    "deviceToken": "",
+    "userId": "",
+    "domain": "www.workbuddy.ai",
+    "product": "SaaS",
+    "client": {
+      "userAgent": "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0",
+      "ideType": "WorkBuddy",
+      "ideName": "WorkBuddy",
+      "ideVersion": "5.8.4",
+      "codebuddyRequest": "1"
+    },
+    "maxConcurrency": 1,
+    "refreshSkewSeconds": 600,
+    "headerTimeoutMs": 120000
+  },
+  "models": {
+    "default": "deepseek-v4.1-flash",
+    "aliases": {
+      "gpt-4o": "deepseek-v4.1-flash",
+      "gpt-4o-mini": "deepseek-v4.1-flash",
+      "gpt-4.1": "deepseek-v4.1-flash",
+      "claude-3-5-sonnet": "deepseek-v4.1-flash",
+      "claude-sonnet-4": "deepseek-v4.1-flash"
+    },
+    "fallback": {},
+    "allowUnknown": true,
+    "cacheTtlSeconds": 600,
+    "contextWindow": {
+      "default": 1000000,
+      "overrides": {}
+    }
+  },
+  "prompt": {
+    "system": "You are a helpful assistant.",
+    "injectWhenMissing": true
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "baseDelayMs": 2500,
+    "maxDelayMs": 20000
+  },
+  "logging": {
+    "requests": true
+  }
+}
