@@ -78,6 +78,40 @@ npm start
 
 如果你用的客户端仍然显示 300K，改客户端里的模型上下文设置即可——代理和上游都支持 1M。
 
+## 流式与性能
+
+反代是真正的 SSE 流式透传，不是收完整段再返回：
+
+- 上游每个 chunk 到达后立即写回客户端，`: heartbeat` 也会原样透传
+- 请求真实模型 ID 时走**零解析快速路径**：字节直接 pipe，不做逐 token 的 JSON parse/stringify
+- 只有使用模型别名或 fallback 时才逐行改写，把响应里的 model 改回客户端请求的名字
+- **慢客户端背压**：`res.write()` 返回 false 时暂停读取上游，避免内存无限增长
+- SSE 响应执行 `flushHeaders()`、`socket.setNoDelay(true)`，并带 `X-Accel-Buffering: no` / `no-transform`，避免 nginx 等中间层缓冲
+- **429 共享冷却**：触发限流后设置冷却窗口，排队请求不会同时撞限流；token 刷新单飞，模型列表缓存 10 分钟
+- 请求体只 `JSON.stringify` 一次，401 刷新或重试时复用
+- 日志新增 `ttfbMs`（首包耗时），控制台请求行 hover 可查看，服务端日志也会打印 `ttfb=...`
+
+实测（本地 mock 上游每 300ms 发一个 chunk）：
+
+```
+chunk 到达: 53ms, 347ms, 658ms, 969ms, 1281ms, 1591ms
+```
+
+682KB / 2002 个 SSE 事件的大响应也能完整透传并正确提取 usage。
+
+可调性能项：
+
+| 配置 | 说明 |
+| --- | --- |
+| `upstream.maxConcurrency` | 默认 1；免费号建议保持，付费/多账号可调大 |
+| `retry.baseDelayMs` / `maxAttempts` | 429 重试节奏 |
+| `models.fallback` | 限流时自动切换模型 |
+| `models.cacheTtlSeconds` | 模型列表缓存时长 |
+
+> 非流式请求会在代理本地聚合整段 SSE，延迟等于完整生成时间；追求低延迟请在客户端开启 `stream: true`。
+>
+> 修改 `src/server.js`、`src/openai.js`、`src/workbuddy.js` 后需要重启 `npm start`；只改 `public/` 前端刷新页面即可。
+
 ## 客户端示例
 
 cURL：

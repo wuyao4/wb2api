@@ -210,6 +210,10 @@ async function handleOpenAIChat(req, res) {
   const { res: upstream, release, model } = slot;
   let usage = null;
   let errorMessage = null;
+  let firstTokenMs = null;
+  const markFirstToken = () => {
+    if (firstTokenMs === null) firstTokenMs = Date.now() - started;
+  };
 
   try {
     if (!upstream.ok) {
@@ -230,16 +234,24 @@ async function handleOpenAIChat(req, res) {
         Connection: 'keep-alive',
         'X-Accel-Buffering': 'no'
       });
+      res.flushHeaders();
+      res.socket?.setNoDelay(true);
       await relayOpenAIStream({
         body: upstream.body,
         res,
         requestedModel,
+        upstreamModel: model,
+        onFirstChunk: markFirstToken,
         onUsage: (value) => {
           usage = value;
         }
       });
     } else {
-      const completion = await collectOpenAICompletion({ body: upstream.body, requestedModel });
+      const completion = await collectOpenAICompletion({
+        body: upstream.body,
+        requestedModel,
+        onFirstChunk: markFirstToken
+      });
       usage = completion.usage;
       sendJson(res, 200, completion);
     }
@@ -262,6 +274,7 @@ async function handleOpenAIChat(req, res) {
       stream: !!body.stream,
       status: res.statusCode || 200,
       durationMs: Date.now() - started,
+      ttfbMs: firstTokenMs,
       promptTokens: usage?.prompt_tokens,
       completionTokens: usage?.completion_tokens,
       error: errorMessage
@@ -269,10 +282,11 @@ async function handleOpenAIChat(req, res) {
     if (config.logging.requests) {
       const parts = [
         `${res.statusCode || 200}`,
-        `model=${requestedModel}${model !== upstreamModel ? `->${model}` : ''}`,
+        `model=${requestedModel}${requestedModel !== model ? `->${model}` : ''}`,
         `stream=${!!body.stream}`,
         `${Date.now() - started}ms`
       ];
+      if (firstTokenMs !== null) parts.push(`ttfb=${firstTokenMs}ms`);
       if (usage) parts.push(`tokens=${usage.prompt_tokens ?? '?'}/${usage.completion_tokens ?? '?'}`);
       log(`chat ${parts.join(' ')}`);
     }
@@ -317,6 +331,10 @@ async function handleAnthropicMessages(req, res) {
   const { res: upstream, release } = slot;
   let usage = null;
   let errorMessage = null;
+  let firstTokenMs = null;
+  const markFirstToken = () => {
+    if (firstTokenMs === null) firstTokenMs = Date.now() - started;
+  };
 
   try {
     if (!upstream.ok) {
@@ -332,16 +350,23 @@ async function handleAnthropicMessages(req, res) {
         Connection: 'keep-alive',
         'X-Accel-Buffering': 'no'
       });
+      res.flushHeaders();
+      res.socket?.setNoDelay(true);
       await relayAnthropicStream({
         body: upstream.body,
         res,
         requestedModel,
+        onFirstChunk: markFirstToken,
         onUsage: (value) => {
           usage = value;
         }
       });
     } else {
-      const completion = await collectOpenAICompletion({ body: upstream.body, requestedModel });
+      const completion = await collectOpenAICompletion({
+        body: upstream.body,
+        requestedModel,
+        onFirstChunk: markFirstToken
+      });
       usage = completion.usage;
       sendJson(res, 200, openAIToAnthropicMessage(completion, requestedModel));
     }
@@ -360,6 +385,7 @@ async function handleAnthropicMessages(req, res) {
       stream: !!request.stream,
       status: res.statusCode || 200,
       durationMs: Date.now() - started,
+      ttfbMs: firstTokenMs,
       promptTokens: usage?.prompt_tokens,
       completionTokens: usage?.completion_tokens,
       error: errorMessage
@@ -371,6 +397,7 @@ async function handleAnthropicMessages(req, res) {
         `stream=${!!request.stream}`,
         `${Date.now() - started}ms`
       ];
+      if (firstTokenMs !== null) parts.push(`ttfb=${firstTokenMs}ms`);
       if (usage) parts.push(`tokens=${usage.prompt_tokens ?? '?'}/${usage.completion_tokens ?? '?'}`);
       log(`messages ${parts.join(' ')}`);
     }
@@ -698,6 +725,7 @@ const server = http.createServer(async (req, res) => {
 server.requestTimeout = 0;
 server.headersTimeout = 65000;
 server.keepAliveTimeout = 72000;
+server.noDelay = true;
 
 server.listen(config.server.port, config.server.host, () => {
   log(`workbuddy2api listening on http://${config.server.host}:${config.server.port}`);

@@ -20,6 +20,7 @@ export function recordRequest(entry) {
     stream: !!entry.stream,
     status: entry.status || 200,
     durationMs: entry.durationMs || 0,
+    ttfbMs: entry.ttfbMs ?? null,
     promptTokens: entry.promptTokens ?? null,
     completionTokens: entry.completionTokens ?? null,
     error: entry.error || null

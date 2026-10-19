@@ -1,6 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { readSSE } from './openai.js';
 
+async function waitForDrain(res) {
+  if (!res.writableNeedDrain) return;
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error('client disconnected'));
+    };
+    res.on('drain', onDrain);
+    res.on('close', onClose);
+  });
+}
+
 const STOP_REASON = {
   stop: 'end_turn',
   length: 'max_tokens',
@@ -190,7 +210,7 @@ export function openAIToAnthropicMessage(completion, requestedModel) {
 }
 
 /** Translate an OpenAI SSE stream into Anthropic message events. */
-export async function relayAnthropicStream({ body, res, requestedModel, onUsage }) {
+export async function relayAnthropicStream({ body, res, requestedModel, onUsage, onFirstChunk }) {
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const id = messageId();
 
@@ -212,6 +232,7 @@ export async function relayAnthropicStream({ body, res, requestedModel, onUsage 
   let open = null;
   let finishReason = 'stop';
   let usage = null;
+  let first = true;
 
   const closeBlock = () => {
     if (!open) return;
@@ -228,6 +249,10 @@ export async function relayAnthropicStream({ body, res, requestedModel, onUsage 
   for await (const event of readSSE(body)) {
     const chunk = event.data;
     if (!chunk) continue;
+    if (first) {
+      first = false;
+      if (onFirstChunk) onFirstChunk();
+    }
     if (chunk.usage) {
       usage = chunk.usage;
       if (onUsage) onUsage(chunk.usage);
@@ -278,6 +303,7 @@ export async function relayAnthropicStream({ body, res, requestedModel, onUsage 
         });
       }
     }
+    await waitForDrain(res);
   }
 
   closeBlock();

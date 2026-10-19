@@ -99,18 +99,89 @@ export async function* readSSE(body) {
   if (buffer.length) yield* parseLine(buffer);
 }
 
-/**
- * Relay an upstream SSE stream to the client, keeping the OpenAI wire format
- * and rewriting the model name back to what the client asked for.
- */
-export async function relayOpenAIStream({ body, res, requestedModel, onUsage }) {
+async function writeWithBackpressure(res, data) {
+  if (res.write(data)) return;
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error('client disconnected'));
+    };
+    res.on('drain', onDrain);
+    res.on('close', onClose);
+  });
+}
+
+function usageFromTail(tail) {
+  if (!tail.includes('"usage":{')) return null;
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!line.startsWith('data:') || !line.includes('"usage":{')) continue;
+    try {
+      const chunk = JSON.parse(line.slice(5).trim());
+      if (chunk.usage) return chunk.usage;
+    } catch {
+      /* partial line */
+    }
+  }
+  return null;
+}
+
+async function passthroughStream(body, res, { onUsage, onFirstChunk }) {
+  const decoder = new TextDecoder();
+  let tail = '';
+  let probe = '';
+  let sawDone = false;
+  let first = true;
+
+  for await (const chunk of body) {
+    if (first) {
+      first = false;
+      if (onFirstChunk) onFirstChunk();
+    }
+    await writeWithBackpressure(res, chunk);
+
+    const text = decoder.decode(chunk, { stream: true });
+    tail += text;
+    if (tail.length > 131072) tail = tail.slice(-65536);
+    probe = (probe + text).slice(-16);
+    if (!sawDone && probe.includes('[DONE]')) sawDone = true;
+  }
+
+  const rest = decoder.decode();
+  if (rest) {
+    tail += rest;
+    probe = (probe + rest).slice(-16);
+  }
+  if (!sawDone && probe.includes('[DONE]')) sawDone = true;
+
+  const usage = usageFromTail(tail.slice(-65536));
+  if (usage && onUsage) onUsage(usage);
+  if (!sawDone) await writeWithBackpressure(res, 'data: [DONE]\n\n');
+}
+
+async function rewriteStream(body, res, { requestedModel, onUsage, onFirstChunk }) {
   let sawDone = false;
   let skipBlank = false;
+  let first = true;
 
   for await (const event of readSSE(body)) {
+    if (first) {
+      first = false;
+      if (onFirstChunk) onFirstChunk();
+    }
+
     if (event.done) {
       sawDone = true;
-      res.write('data: [DONE]\n\n');
+      await writeWithBackpressure(res, 'data: [DONE]\n\n');
       continue;
     }
 
@@ -118,13 +189,13 @@ export async function relayOpenAIStream({ body, res, requestedModel, onUsage }) 
       const chunk = event.data;
       if (requestedModel && chunk.model) chunk.model = requestedModel;
       if (chunk.usage && onUsage) onUsage(chunk.usage);
-      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      await writeWithBackpressure(res, `data: ${JSON.stringify(chunk)}\n\n`);
       skipBlank = true;
       continue;
     }
 
     if (event.raw) {
-      res.write(`${event.raw}\n`);
+      await writeWithBackpressure(res, `${event.raw}\n`);
       skipBlank = false;
       continue;
     }
@@ -134,20 +205,35 @@ export async function relayOpenAIStream({ body, res, requestedModel, onUsage }) 
         skipBlank = false;
         continue;
       }
-      res.write('\n');
+      await writeWithBackpressure(res, '\n');
       continue;
     }
 
-    // Comments such as ": heartbeat" and any unknown fields.
-    res.write(`${event.line}\n`);
+    await writeWithBackpressure(res, `${event.line}\n`);
     skipBlank = false;
   }
 
-  if (!sawDone) res.write('data: [DONE]\n\n');
+  if (!sawDone) await writeWithBackpressure(res, 'data: [DONE]\n\n');
+}
+
+/**
+ * Relay an upstream SSE stream to the client.
+ *
+ * When the client requested the real upstream model id (the common case) the
+ * bytes are piped straight through: no JSON parse/stringify per token, no
+ * TextDecoder work beyond a bounded tail used for usage logging. Model-name
+ * rewriting (aliases) takes the slower line-by-line path.
+ */
+export async function relayOpenAIStream({ body, res, requestedModel, upstreamModel, onUsage, onFirstChunk }) {
+  const canPassthrough = !requestedModel || !upstreamModel || requestedModel === upstreamModel;
+  if (canPassthrough) {
+    return passthroughStream(body, res, { onUsage, onFirstChunk });
+  }
+  return rewriteStream(body, res, { requestedModel, onUsage, onFirstChunk });
 }
 
 /** Collect an upstream SSE stream into one OpenAI chat.completion object. */
-export async function collectOpenAICompletion({ body, requestedModel }) {
+export async function collectOpenAICompletion({ body, requestedModel, onFirstChunk }) {
   let id = null;
   let created = null;
   let model = null;
@@ -155,11 +241,16 @@ export async function collectOpenAICompletion({ body, requestedModel }) {
   let finishReason = null;
   let content = '';
   let reasoning = '';
+  let first = true;
   const toolCalls = new Map();
 
   for await (const event of readSSE(body)) {
     const chunk = event.data;
     if (!chunk) continue;
+    if (first) {
+      first = false;
+      if (onFirstChunk) onFirstChunk();
+    }
 
     if (chunk.id) id = chunk.id;
     if (chunk.created) created = chunk.created;

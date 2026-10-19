@@ -31,7 +31,27 @@ const STATIC_MODELS = [
   ['kimi-k2.6', 'Kimi-K2.6']
 ];
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason || new Error('aborted'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason || new Error('aborted'));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 function jwtExpiresAt(token) {
   try {
@@ -88,6 +108,7 @@ export function effectiveContextLength(model, config) {
 
 export class WorkBuddyClient {
   #refreshing = null;
+  #cooldownUntil = 0;
   #models = null;
   #modelsFetchedAt = 0;
 
@@ -227,7 +248,7 @@ export class WorkBuddyClient {
     log(`access token refreshed (expires in ${json.data.expiresIn ?? '?'}s)`);
   }
 
-  async #postChat(body, { signal, conversationId } = {}) {
+  async #postChat(payload, { signal, conversationId } = {}) {
     const controller = new AbortController();
     const onAbort = () => controller.abort(signal.reason);
     if (signal) {
@@ -242,11 +263,19 @@ export class WorkBuddyClient {
       return await fetch(`${this.upstream.baseUrl.replace(/\/+$/, '')}/v2/chat/completions`, {
         method: 'POST',
         headers: this.#chatHeaders(conversationId),
-        body: JSON.stringify(body),
+        body: payload,
         signal: controller.signal
       });
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  async #waitCooldown(signal) {
+    for (;;) {
+      const remaining = this.#cooldownUntil - Date.now();
+      if (remaining <= 0) return;
+      await sleep(remaining, signal);
     }
   }
 
@@ -257,17 +286,21 @@ export class WorkBuddyClient {
     const maxAttempts = Math.max(1, Number(retry.maxAttempts) || 1);
     const baseDelay = Number(retry.baseDelayMs) || 2500;
     const maxDelay = Number(retry.maxDelayMs) || 20000;
+    const signal = options.signal;
     const originalModel = body.model;
     const fallbackModels = this.config.models.fallback?.[originalModel] || [];
     let model = originalModel;
     let fallbackIndex = 0;
     let refreshed = false;
+    let payload = JSON.stringify({ ...body, model });
 
     for (let attempt = 1; ; attempt += 1) {
       await this.semaphore.acquire();
       let res;
       try {
-        res = await this.#postChat({ ...body, model }, options);
+        if (signal?.aborted) throw signal.reason || new Error('client disconnected');
+        await this.#waitCooldown(signal);
+        res = await this.#postChat(payload, options);
       } catch (err) {
         this.semaphore.release();
         throw err;
@@ -288,8 +321,13 @@ export class WorkBuddyClient {
         const info = await this.#describeError(res);
         this.semaphore.release();
         const delay = Math.min(maxDelay, baseDelay * 2 ** (attempt - 1));
+        if (res.status === 429) {
+          // A shared cooldown stops queued requests from immediately walking
+          // into the same upstream rate limit.
+          this.#cooldownUntil = Math.max(this.#cooldownUntil, Date.now() + delay);
+        }
         warn(`upstream ${res.status} (${info.code ?? '-'} ${info.message}) on ${model}, retry ${attempt}/${maxAttempts - 1} in ${delay}ms`);
-        await sleep(delay);
+        await sleep(delay, signal);
         continue;
       }
 
@@ -297,9 +335,15 @@ export class WorkBuddyClient {
         await res.text().catch(() => '');
         this.semaphore.release();
         model = fallbackModels[fallbackIndex++];
+        payload = JSON.stringify({ ...body, model });
         attempt = 0;
         warn(`upstream busy, falling back to ${model}`);
         continue;
+      }
+
+      if (res.status === 429) {
+        const delay = Math.min(maxDelay, baseDelay * 2 ** Math.max(0, attempt - 1));
+        this.#cooldownUntil = Math.max(this.#cooldownUntil, Date.now() + delay);
       }
 
       // The caller owns the semaphore slot from here and must release it once

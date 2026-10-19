@@ -954,7 +954,11 @@ function renderLogs(logs) {
   for (const entry of logs) {
     const row = document.createElement('div');
     row.className = 'log-row';
-    row.title = entry.error || '';
+    const titleParts = [];
+    if (entry.error) titleParts.push(entry.error);
+    if (entry.ttfbMs != null) titleParts.push(`首包 ${entry.ttfbMs}ms`);
+    titleParts.push(`总耗时 ${entry.durationMs}ms`);
+    row.title = titleParts.join(' · ');
 
     const time = document.createElement('span');
     time.className = 't';
@@ -1083,8 +1087,18 @@ async function init() {
   }
 
   await loadLogs();
-  setInterval(() => refreshStatus(), 5000);
-  setInterval(() => loadLogs(), 4000);
+  setInterval(() => {
+    if (!document.hidden) refreshStatus();
+  }, 5000);
+  setInterval(() => {
+    if (!document.hidden) loadLogs();
+  }, 4000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      refreshStatus();
+      loadLogs();
+    }
+  });
 }
 
 init();
