@@ -289,7 +289,7 @@ npm run login
 4. 轮询 `GET /v2/plugin/auth/token?state=...`，拿到桌面端 access/refresh token
 5. 自动调用 `/admin/credentials` 写入配置；服务未启动时直接写 `config.json`
 
-建议运行前先退出桌面版 WorkBuddy，避免桌面端抢先消费这个 `state`。需要 `config.json` 里有 `upstream.deviceToken`（抓包时已经保存）。
+建议运行前先退出桌面版 WorkBuddy，避免桌面端抢先消费这个 `state`。`deviceToken` 是可选的；有就复用，没有也能登录。
 
 ## 限流与模型选择
 

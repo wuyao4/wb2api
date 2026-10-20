@@ -551,16 +551,12 @@ function renderStatus() {
   startState.classList.toggle('is-on', running);
 
   const loginBtn = $('loginBtn');
-  const canAutoLogin = !!s.canAutoLogin;
   if (!state.loginBusy) {
-    loginBtn.disabled = !canAutoLogin;
+    loginBtn.disabled = false;
     loginBtn.querySelector('.btn-label').textContent = s.user
       ? '重新登录 / 切换账号'
       : '使用 WorkBuddy 账号登录';
-    if (!canAutoLogin) {
-      $('loginHint').textContent =
-        '缺少设备 Token：请展开下方“手动填写 Token”保存一次包含 X-Device-Token 的凭据。';
-    } else if (s.user) {
+    if (s.user) {
       $('loginHint').textContent = `当前账号 ${s.user.username || s.user.email || ''} · 点击可重新授权或切换账号`;
     } else {
       $('loginHint').textContent = '在浏览器完成授权后自动写入 token，无需复制';
@@ -568,7 +564,7 @@ function renderStatus() {
   }
   renderLoginAccount(s.user);
   renderAccounts(s.accounts || []);
-  $('addAccountBtn').disabled = state.loginBusy || !canAutoLogin;
+  $('addAccountBtn').disabled = state.loginBusy;
   $('accountFoot').textContent = `同一会话优先使用同一账号 · 当前保持 ${s.routing?.sessions ?? 0} 个会话`;
 
   const userName = s.user?.username;
@@ -1086,11 +1082,11 @@ function finishLoginError(message) {
   state.loginBusy = false;
   const button = $('loginBtn');
   setBusy(button, false);
-  button.disabled = !(state.status?.canAutoLogin ?? true);
+  button.disabled = false;
   button.querySelector('.btn-label').textContent = state.status?.user
     ? '重新登录 / 切换账号'
     : '使用 WorkBuddy 账号登录';
-  $('addAccountBtn').disabled = !(state.status?.canAutoLogin ?? true);
+  $('addAccountBtn').disabled = false;
   renderAccounts(state.status?.accounts || []);
   setLoginFeedback(message, 'error');
   toast(message, 'error');
@@ -1125,8 +1121,8 @@ function pollLogin(loginState, popup, target = {}) {
         state.loginBusy = false;
         const button = $('loginBtn');
         setBusy(button, false);
-        button.disabled = !(state.status?.canAutoLogin ?? true);
-        $('addAccountBtn').disabled = !(state.status?.canAutoLogin ?? true);
+        button.disabled = false;
+        $('addAccountBtn').disabled = false;
         const who = data.user?.username || data.user?.email || '账号';
         const action = target.createNew ? '账号已添加' : '登录成功';
         setLoginFeedback(

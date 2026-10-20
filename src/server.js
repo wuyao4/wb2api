@@ -427,7 +427,8 @@ async function handleAdminStatus(req, res) {
   sendJson(res, 200, {
     ok: true,
     running: !!config.server.running,
-    canAutoLogin: !!config.upstream.deviceToken,
+    canAutoLogin: true,
+    hasDeviceToken: !!config.upstream.deviceToken,
     baseUrl: publicBaseUrl(req),
     apiKey: config.server.apiKeys?.[0] || '',
     defaultModel: config.models.default,
@@ -463,14 +464,15 @@ async function handleAdminStatus(req, res) {
 
 function pluginHeaders(deviceToken = config.upstream.deviceToken) {
   const upstream = config.upstream;
-  return {
-    'X-Device-Token': deviceToken,
+  const headers = {
     'X-No-Authorization': 'true',
     'X-Product': upstream.product || 'SaaS',
     'X-Domain': upstream.domain || 'www.workbuddy.ai',
     Accept: 'application/json',
     'User-Agent': upstream.client?.userAgent || 'WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0'
   };
+  if (deviceToken) headers['X-Device-Token'] = deviceToken;
+  return headers;
 }
 
 function pruneLoginStates() {
@@ -693,15 +695,7 @@ async function handleLoginStart(req, res) {
     }
   }
 
-  const deviceToken = targetAccount?.deviceToken || config.upstream.deviceToken;
-  if (!deviceToken) {
-    return sendJson(res, 400, {
-      ok: false,
-      status: 'error',
-      error: '缺少设备 Token（X-Device-Token），请先在“手动填写 Token”里保存一次包含设备信息的凭据。'
-    });
-  }
-
+  const deviceToken = targetAccount?.deviceToken || config.upstream.deviceToken || '';
   const label = createNew
     ? String(body.label || '')
     : targetAccount?.label || config.upstream.label || '主账号';
@@ -773,10 +767,6 @@ async function handleLoginStatus(req, res) {
   if (session.error) {
     return sendJson(res, 502, { ok: false, status: 'error', error: session.error });
   }
-  if (!session.deviceToken) {
-    return sendJson(res, 400, { ok: false, status: 'error', error: '缺少设备 Token' });
-  }
-
   if (loginInflight.has(state)) {
     try {
       const result = await loginInflight.get(state);

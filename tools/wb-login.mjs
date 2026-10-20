@@ -67,24 +67,19 @@ async function saveTokens(config, accessToken, refreshToken) {
 
 async function main() {
   const config = loadConfig();
-  const deviceToken = config?.upstream?.deviceToken;
-  if (!deviceToken) {
-    throw new Error(
-      "config.json 里没有 upstream.deviceToken。请从桌面版请求头（X-Device-Token）或 HAR 中获取后填入。"
-    );
-  }
+  const deviceToken = config?.upstream?.deviceToken || '';
 
   const version = config?.upstream?.client?.ideVersion || DEFAULT_VERSION;
   const userAgent =
     config?.upstream?.client?.userAgent || "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0";
   const headers = {
-    "X-Device-Token": deviceToken,
     "X-No-Authorization": "true",
     "X-Product": config?.upstream?.product || "SaaS",
     "X-Domain": config?.upstream?.domain || "www.workbuddy.ai",
     "Accept": "application/json",
     "User-Agent": userAgent
   };
+  if (deviceToken) headers["X-Device-Token"] = deviceToken;
 
   log("正在创建桌面登录会话…");
   const stateResponse = await fetch(
