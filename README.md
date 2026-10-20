@@ -13,7 +13,7 @@ npm start
 
 打开 **http://127.0.0.1:8787/**，三步即可用：
 
-1. **连接 WorkBuddy**：把 access token / refresh token 粘贴到输入框，点「验证并保存」。也支持粘贴 `Authorization: Bearer ...`、请求头文本或 JSON。识别到刷新令牌时会自动换取新的 access token。
+1. **连接 WorkBuddy**：点击「使用 WorkBuddy 账号登录」，浏览器会打开 WorkBuddy 授权页；完成登录后控制台自动拿到桌面端 token 并显示账号，无需复制。也可以展开「手动填写 Token（可选）」粘贴 access token / refresh token、请求头文本或 JSON 作为备用方式。
 2. **生成反代与密钥**：选择默认模型，API Key 可留空（启动时自动生成）或自己填写 / 点「生成」。
 3. **启动反代**：点击「启动反代」，页面会显示 Base URL 与 API Key，可一键复制、重新生成 Key、停止服务。
 
@@ -27,7 +27,8 @@ npm start
 
 控制台功能：
 
-- 自动解析 JWT，识别访问令牌 / 刷新令牌，显示账号与到期时间
+- 一键 WorkBuddy 账号登录，自动捕获桌面端 token 并显示账号
+- 手动填写 Token 作为可选备用方式，自动解析 JWT、识别访问令牌 / 刷新令牌
 - 实时请求日志（模型、状态、耗时、token 用量）
 - 请求数 / 输入输出 token / 运行时长统计
 - Token 到期倒计时、一键刷新
@@ -152,6 +153,8 @@ Claude Code / Anthropic 协议：
 | GET | `/healthz` | 健康检查 |
 | GET | `/admin/status` | 控制台状态、账号、统计 |
 | POST | `/admin/credentials` | 解析并保存 Token |
+| POST | `/admin/login/start` | 创建桌面登录 state 与授权地址 |
+| GET | `/admin/login/status?state=...` | 轮询授权结果并自动保存 token |
 | POST | `/admin/start` | 启动 / 更新反代，生成 Key |
 | POST | `/admin/stop` | 停止反代 |
 | POST | `/admin/key` | 重新生成 API Key |
@@ -223,6 +226,24 @@ npm run refresh
 ```
 
 刷新成功后新的 access / refresh token 会自动写回 `config.json`。
+
+### 一键重新登录（桌面版同款 state 流程）
+
+运行：
+
+```bash
+npm run login
+```
+
+或直接双击项目根目录的 `wb-login.cmd`。流程和桌面版完全一致：
+
+1. 读取 `config.json` 里的 `upstream.deviceToken`
+2. `POST /v2/plugin/auth/state?platform=workbuddy-ai&version=5.8.4` 创建 `state` + `authUrl`
+3. 打开浏览器登录；网页端会把账号绑定到这个 `state`
+4. 轮询 `GET /v2/plugin/auth/token?state=...`，拿到桌面端 access/refresh token
+5. 自动调用 `/admin/credentials` 写入配置；服务未启动时直接写 `config.json`
+
+建议运行前先退出桌面版 WorkBuddy，避免桌面端抢先消费这个 `state`。需要 `config.json` 里有 `upstream.deviceToken`（抓包时已经保存）。
 
 ## 限流与模型选择
 

@@ -9,7 +9,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "refresh": "node bin/refresh.js",
-    "setup": "node bin/setup.js"
+    "setup": "node bin/setup.js",
+    "login": "node tools/wb-login.mjs"
   },
   "engines": {
     "node": ">=18"

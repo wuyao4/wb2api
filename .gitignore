@@ -5,5 +5,7 @@ config.json.*
 .env.*
 *.bak
 *.log
+.wb-browser/
+public/evidence.json
 .DS_Store
 Thumbs.db

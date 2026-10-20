@@ -49,44 +49,59 @@
               <span class="head-state" id="credState">待填写</span>
             </header>
 
-            <label class="field-label" for="tokenInput">WorkBuddy Token</label>
-            <div class="token-wrap">
-              <textarea
-                id="tokenInput"
-                spellcheck="false"
-                autocomplete="off"
-                autocapitalize="off"
-                placeholder="eyJhbGciOi...&#10;或 Authorization: Bearer eyJ...&#10;或 HAR / 请求头 JSON"
-              ></textarea>
-              <div class="token-tools">
-                <button class="ghost mini" id="pasteBtn" type="button">粘贴</button>
-                <button class="ghost mini" id="clearBtn" type="button">清空</button>
-              </div>
+            <div class="login-panel">
+              <button class="btn primary login-btn" id="loginBtn" type="button">
+                <span class="btn-label">使用 WorkBuddy 账号登录</span>
+                <span class="spinner" aria-hidden="true"></span>
+              </button>
+              <div class="login-hint" id="loginHint">在浏览器完成授权后自动写入 token，无需复制</div>
+              <div class="login-feedback" id="loginFeedback" hidden></div>
+              <div class="login-account" id="loginAccount" hidden></div>
             </div>
-            <div class="field-hint" id="tokenHint">
-              支持 access token、refresh token、请求头文本或 JSON，服务端只从中提取凭据。
-            </div>
-            <div class="parsed" id="parsedChips" hidden></div>
 
-            <details class="advanced">
-              <summary>高级选项（可选）</summary>
-              <div class="advanced-grid">
-                <label>
-                  设备 Token
-                  <input id="deviceInput" spellcheck="false" autocomplete="off" placeholder="X-Device-Token，可留空" />
-                </label>
-                <label>
-                  用户 ID
-                  <input id="userInput" spellcheck="false" autocomplete="off" placeholder="X-User-Id，可留空" />
-                </label>
+            <details class="manual-token" id="manualToken">
+              <summary>手动填写 Token（可选）</summary>
+              <div class="manual-body">
+                <label class="field-label" for="tokenInput">WorkBuddy Token</label>
+                <div class="token-wrap">
+                  <textarea
+                    id="tokenInput"
+                    spellcheck="false"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    placeholder="eyJhbGciOi...&#10;或 Authorization: Bearer eyJ...&#10;或 HAR / 请求头 JSON"
+                  ></textarea>
+                  <div class="token-tools">
+                    <button class="ghost mini" id="pasteBtn" type="button">粘贴</button>
+                    <button class="ghost mini" id="clearBtn" type="button">清空</button>
+                  </div>
+                </div>
+                <div class="field-hint" id="tokenHint">
+                  支持 access token、refresh token、请求头文本或 JSON，服务端只从中提取凭据。
+                </div>
+                <div class="parsed" id="parsedChips" hidden></div>
+
+                <details class="advanced">
+                  <summary>高级选项（可选）</summary>
+                  <div class="advanced-grid">
+                    <label>
+                      设备 Token
+                      <input id="deviceInput" spellcheck="false" autocomplete="off" placeholder="X-Device-Token，可留空" />
+                    </label>
+                    <label>
+                      用户 ID
+                      <input id="userInput" spellcheck="false" autocomplete="off" placeholder="X-User-Id，可留空" />
+                    </label>
+                  </div>
+                </details>
+
+                <button class="btn secondary" id="saveBtn" type="button" disabled>
+                  <span class="btn-label">验证并保存</span>
+                  <span class="spinner" aria-hidden="true"></span>
+                </button>
+                <div class="inline-msg" id="credMsg" role="status"></div>
               </div>
             </details>
-
-            <button class="btn primary" id="saveBtn" type="button" disabled>
-              <span class="btn-label">验证并保存</span>
-              <span class="spinner" aria-hidden="true"></span>
-            </button>
-            <div class="inline-msg" id="credMsg" role="status"></div>
           </section>
 
           <section class="card step-card" id="cardStart">

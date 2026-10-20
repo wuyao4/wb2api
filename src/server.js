@@ -38,6 +38,8 @@ function persist(updated) {
 }
 
 const client = new WorkBuddyClient(config, (updated) => persist(updated));
+const loginStates = new Map();
+const loginInflight = new Map();
 
 function applyCors(req, res) {
   const origin = req.headers.origin || '*';
@@ -416,6 +418,7 @@ async function handleAdminStatus(req, res) {
   sendJson(res, 200, {
     ok: true,
     running: !!config.server.running,
+    canAutoLogin: !!config.upstream.deviceToken,
     baseUrl: publicBaseUrl(req),
     apiKey: config.server.apiKeys?.[0] || '',
     defaultModel: config.models.default,
@@ -442,16 +445,35 @@ async function handleAdminStatus(req, res) {
   });
 }
 
-async function handleCredentials(req, res) {
-  const body = await readJson(req);
-  const source = typeof body.source === 'string' ? body.source : '';
-  const creds = extractCredentials(source);
+function pluginHeaders() {
+  const upstream = config.upstream;
+  return {
+    'X-Device-Token': upstream.deviceToken,
+    'X-No-Authorization': 'true',
+    'X-Product': upstream.product || 'SaaS',
+    'X-Domain': upstream.domain || 'www.workbuddy.ai',
+    Accept: 'application/json',
+    'User-Agent': upstream.client?.userAgent || 'WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0'
+  };
+}
+
+function pruneLoginStates() {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  for (const [state, value] of loginStates) {
+    if (value.at < cutoff) loginStates.delete(state);
+  }
+}
+
+async function applyCredentialSource(source, overrides = {}) {
+  const creds = extractCredentials(typeof source === 'string' ? source : '');
+  if (overrides.deviceToken) creds.deviceToken = String(overrides.deviceToken).trim();
+  if (overrides.userId) creds.userId = String(overrides.userId).trim();
 
   if (!creds.accessToken && !creds.refreshToken) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: '没有识别到 JWT。请粘贴 access token、refresh token，或包含 Authorization 的请求头。'
-    });
+    throw Object.assign(
+      new Error('没有识别到 JWT。请粘贴 access token、refresh token，或包含 Authorization 的请求头。'),
+      { status: 400 }
+    );
   }
 
   const candidate = structuredClone(config);
@@ -476,18 +498,18 @@ async function handleCredentials(req, res) {
       await temp.refreshToken();
     } catch (err) {
       warning = `刷新令牌不可用：${err.message}`;
-      if (!creds.accessToken) return sendJson(res, 400, { ok: false, error: warning });
+      if (!creds.accessToken) throw Object.assign(new Error(warning), { status: 400 });
     }
   }
 
   if (!candidate.upstream.accessToken) {
-    return sendJson(res, 400, { ok: false, error: '未能获得可用的 access token。' });
+    throw Object.assign(new Error('未能获得可用的 access token。'), { status: 400 });
   }
 
   try {
     await temp.fetchProductConfigStrict();
   } catch (err) {
-    return sendJson(res, 400, { ok: false, error: `Token 校验失败：${err.message}` });
+    throw Object.assign(new Error(`Token 校验失败：${err.message}`), { status: 400 });
   }
 
   const profile = profileFromToken(candidate.upstream.accessToken);
@@ -503,17 +525,152 @@ async function handleCredentials(req, res) {
   log(`credentials saved for ${profile?.username || profile?.sub || 'unknown user'}`);
 
   const expiresAt = client.tokenExpiresAt();
-  sendJson(res, 200, {
-    ok: true,
+  return {
     warning,
-    user: profile
-      ? { username: profile.username, email: profile.email, sub: profile.sub }
-      : null,
+    user: profile ? { username: profile.username, email: profile.email, sub: profile.sub } : null,
     token: {
       expiresAt: expiresAt ? new Date(expiresAt * 1000).toISOString() : null,
       hasRefreshToken: !!config.upstream.refreshToken
     }
-  });
+  };
+}
+
+async function handleCredentials(req, res) {
+  const body = await readJson(req);
+  try {
+    const result = await applyCredentialSource(body.source, {
+      deviceToken: body.deviceToken,
+      userId: body.userId
+    });
+    sendJson(res, 200, { ok: true, ...result });
+  } catch (err) {
+    sendJson(res, err.status || 400, { ok: false, error: err.message });
+  }
+}
+
+async function handleLoginStart(req, res) {
+  pruneLoginStates();
+  if (!config.upstream.deviceToken) {
+    return sendJson(res, 400, {
+      ok: false,
+      status: 'error',
+      error: '缺少设备 Token（X-Device-Token），请先在“手动填写 Token”里保存一次包含设备信息的凭据。'
+    });
+  }
+
+  const base = config.upstream.baseUrl.replace(/\/+$/, '');
+  let origin = 'https://www.workbuddy.ai';
+  try {
+    origin = new URL(base).origin;
+  } catch {
+    /* keep default */
+  }
+  const version = config.upstream.client?.ideVersion || '5.8.4';
+
+  try {
+    const response = await fetch(
+      `${base}/v2/plugin/auth/state?platform=workbuddy-ai&version=${encodeURIComponent(version)}`,
+      { method: 'POST', headers: pluginHeaders(), signal: AbortSignal.timeout(20000) }
+    );
+    const text = await response.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      /* ignore */
+    }
+    if (!response.ok || json?.code !== 0 || !json?.data?.state || !json?.data?.authUrl) {
+      throw new Error(json?.msg || `创建登录会话失败（${response.status}）`);
+    }
+    const authUrl = String(json.data.authUrl);
+    if (!authUrl.startsWith(`${origin}/`)) throw new Error('上游返回了非预期的授权地址');
+
+    loginStates.set(json.data.state, { at: Date.now() });
+    sendJson(res, 200, { ok: true, state: json.data.state, authUrl });
+  } catch (err) {
+    sendJson(res, 502, { ok: false, status: 'error', error: err.message });
+  }
+}
+
+async function handleLoginStatus(req, res) {
+  pruneLoginStates();
+  const requestUrl = new URL(req.url, 'http://localhost');
+  const state = requestUrl.searchParams.get('state') || '';
+  if (!state) {
+    return sendJson(res, 400, { ok: false, status: 'error', error: '缺少 state' });
+  }
+
+  const session = loginStates.get(state);
+  if (!session) {
+    return sendJson(res, 400, {
+      ok: false,
+      status: 'error',
+      error: '登录会话不存在或已过期，请重新发起登录'
+    });
+  }
+  if (session.result) {
+    return sendJson(res, 200, { ok: true, status: 'success', ...session.result });
+  }
+  if (session.error) {
+    return sendJson(res, 502, { ok: false, status: 'error', error: session.error });
+  }
+  if (!config.upstream.deviceToken) {
+    return sendJson(res, 400, { ok: false, status: 'error', error: '缺少设备 Token' });
+  }
+
+  if (loginInflight.has(state)) {
+    try {
+      const result = await loginInflight.get(state);
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 502, { ok: false, status: 'error', error: err.message });
+    }
+  }
+
+  const task = (async () => {
+    const base = config.upstream.baseUrl.replace(/\/+$/, '');
+    const response = await fetch(
+      `${base}/v2/plugin/auth/token?state=${encodeURIComponent(state)}`,
+      { headers: pluginHeaders(), signal: AbortSignal.timeout(20000) }
+    );
+    const text = await response.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      /* ignore */
+    }
+
+    if (json?.code === 11217) return { status: 'pending' };
+    if (!response.ok || json?.code !== 0) {
+      throw new Error(json?.msg || `获取登录 token 失败（${response.status}）`);
+    }
+
+    const accessToken = json?.data?.accessToken || json?.data?.access_token;
+    const refreshToken = json?.data?.refreshToken || json?.data?.refresh_token;
+    if (!accessToken) throw new Error('登录已完成，但上游没有返回 access token');
+
+    const source = [
+      `Authorization: Bearer ${accessToken}`,
+      refreshToken ? `X-Refresh-Token: ${refreshToken}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const result = await applyCredentialSource(source);
+    return { status: 'success', ...result };
+  })();
+
+  loginInflight.set(state, task);
+  try {
+    const result = await task;
+    if (result.status === 'success') session.result = result;
+    sendJson(res, 200, { ok: true, ...result });
+  } catch (err) {
+    session.error = err.message;
+    sendJson(res, 502, { ok: false, status: 'error', error: err.message });
+  } finally {
+    loginInflight.delete(state);
+  }
 }
 
 async function handleStart(req, res) {
@@ -678,6 +835,8 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'GET' && pathname === '/admin/status') return await handleAdminStatus(req, res);
       if (req.method === 'POST' && pathname === '/admin/credentials') return await handleCredentials(req, res);
+      if (req.method === 'POST' && pathname === '/admin/login/start') return await handleLoginStart(req, res);
+      if (req.method === 'GET' && pathname === '/admin/login/status') return await handleLoginStatus(req, res);
       if (req.method === 'POST' && pathname === '/admin/start') return await handleStart(req, res);
       if (req.method === 'POST' && pathname === '/admin/stop') return handleStop(req, res);
       if (req.method === 'POST' && pathname === '/admin/key') return handleGenerateKey(req, res);

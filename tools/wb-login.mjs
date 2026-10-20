@@ -1,0 +1,150 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const CONFIG_PATH = path.join(ROOT, "config.json");
+const SERVICE = "http://127.0.0.1:8787";
+const PLATFORM = "workbuddy-ai";
+const DEFAULT_VERSION = "5.8.4";
+const TIMEOUT_MS = 10 * 60 * 1000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const log = (...args) => console.log(`[${new Date().toLocaleTimeString()}]`, ...args);
+
+function loadConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    throw new Error(`找不到 ${CONFIG_PATH}，请先运行 npm start 或 npm run setup`);
+  }
+  return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+}
+
+function openBrowser(url) {
+  if (process.platform === "win32") {
+    spawn("cmd", ["/c", "start", "", url], { stdio: "ignore", windowsHide: true });
+  } else if (process.platform === "darwin") {
+    spawn("open", [url], { stdio: "ignore" });
+  } else {
+    spawn("xdg-open", [url], { stdio: "ignore" });
+  }
+}
+
+async function saveTokens(config, accessToken, refreshToken) {
+  const source = [
+    accessToken ? `Authorization: Bearer ${accessToken}` : "",
+    refreshToken ? `X-Refresh-Token: ${refreshToken}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    const response = await fetch(`${SERVICE}/admin/credentials`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source })
+    });
+    const body = await response.json();
+    if (response.ok && body.ok) {
+      log("登录成功，token 已自动写入 WorkBuddy2API。");
+      log(`账号：${body.user?.username || body.user?.email || "未知"}`);
+      log(`access token 到期：${body.token?.expiresAt || "未知"}`);
+      log(`刷新令牌：${body.token?.hasRefreshToken ? "已保存" : "未获取"}`);
+      return true;
+    }
+    log(`服务端保存失败（HTTP ${response.status}）：${JSON.stringify(body).slice(0, 300)}`);
+  } catch (error) {
+    log(`WorkBuddy2API 服务未响应（${error.message}），改为直接写入 config.json。`);
+  }
+
+  config.upstream = config.upstream || {};
+  if (accessToken) config.upstream.accessToken = accessToken;
+  if (refreshToken) config.upstream.refreshToken = refreshToken;
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
+  log("已直接写入 config.json，重启 npm start 后生效。");
+  return true;
+}
+
+async function main() {
+  const config = loadConfig();
+  const deviceToken = config?.upstream?.deviceToken;
+  if (!deviceToken) {
+    throw new Error(
+      "config.json 里没有 upstream.deviceToken。请从桌面版请求头（X-Device-Token）或 HAR 中获取后填入。"
+    );
+  }
+
+  const version = config?.upstream?.client?.ideVersion || DEFAULT_VERSION;
+  const userAgent =
+    config?.upstream?.client?.userAgent || "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0";
+  const headers = {
+    "X-Device-Token": deviceToken,
+    "X-No-Authorization": "true",
+    "X-Product": config?.upstream?.product || "SaaS",
+    "X-Domain": config?.upstream?.domain || "www.workbuddy.ai",
+    "Accept": "application/json",
+    "User-Agent": userAgent
+  };
+
+  log("正在创建桌面登录会话…");
+  const stateResponse = await fetch(
+    `https://www.workbuddy.ai/v2/plugin/auth/state?platform=${encodeURIComponent(PLATFORM)}&version=${encodeURIComponent(version)}`,
+    { method: "POST", headers }
+  );
+  const stateBody = await stateResponse.json();
+  const state = stateBody?.data?.state;
+  const authUrl = stateBody?.data?.authUrl;
+  if (!stateResponse.ok || stateBody?.code !== 0 || !state || !authUrl) {
+    throw new Error(`创建登录会话失败：${stateBody?.code || stateResponse.status} ${stateBody?.msg || ""}`);
+  }
+
+  log("请在打开的浏览器里完成 WorkBuddy 登录。");
+  log("提示：先退出桌面版 WorkBuddy，避免桌面端抢先消费这个 state。");
+  openBrowser(authUrl);
+
+  const deadline = Date.now() + TIMEOUT_MS;
+  let lastNotice = 0;
+
+  while (Date.now() < deadline) {
+    await sleep(2000);
+    try {
+      const response = await fetch(
+        `https://www.workbuddy.ai/v2/plugin/auth/token?state=${encodeURIComponent(state)}`,
+        { headers }
+      );
+      const text = await response.text();
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        /* ignore */
+      }
+
+      const accessToken = body?.data?.accessToken || body?.data?.access_token;
+      const refreshToken = body?.data?.refreshToken || body?.data?.refresh_token;
+      if (body?.code === 0 && accessToken) {
+        await saveTokens(config, accessToken, refreshToken);
+        return;
+      }
+
+      if (body?.code && body.code !== 11217) {
+        log(`等待失败：${body.code} ${body.msg || ""}`);
+        return;
+      }
+
+      if (Date.now() - lastNotice > 15000) {
+        lastNotice = Date.now();
+        log("等待登录完成…");
+      }
+    } catch (error) {
+      log(`轮询失败：${error.message}`);
+    }
+  }
+
+  throw new Error("超时：10 分钟内没有拿到 token，请重新运行 npm run login。");
+}
+
+main().catch((error) => {
+  console.error("失败：", error.message);
+  process.exit(1);
+});

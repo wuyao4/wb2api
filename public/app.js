@@ -8,6 +8,8 @@ const state = {
   contextTouched: false,
   modelSelect: null,
   contextSelect: null,
+  loginBusy: false,
+  loginTimer: null,
   logsSignature: '',
   statusErrorShown: false
 };
@@ -548,6 +550,24 @@ function renderStatus() {
   startState.textContent = running ? '运行中' : configured ? '已配置' : '等待凭据';
   startState.classList.toggle('is-on', running);
 
+  const loginBtn = $('loginBtn');
+  const canAutoLogin = !!s.canAutoLogin;
+  if (!state.loginBusy) {
+    loginBtn.disabled = !canAutoLogin;
+    loginBtn.querySelector('.btn-label').textContent = s.user
+      ? '重新登录 / 切换账号'
+      : '使用 WorkBuddy 账号登录';
+    if (!canAutoLogin) {
+      $('loginHint').textContent =
+        '缺少设备 Token：请展开下方“手动填写 Token”保存一次包含 X-Device-Token 的凭据。';
+    } else if (s.user) {
+      $('loginHint').textContent = `当前账号 ${s.user.username || s.user.email || ''} · 点击可重新授权或切换账号`;
+    } else {
+      $('loginHint').textContent = '在浏览器完成授权后自动写入 token，无需复制';
+    }
+  }
+  renderLoginAccount(s.user);
+
   $('userLine').textContent = s.user?.username
     ? `${s.user.username}${s.user.email ? ` · ${s.user.email}` : ''}`
     : configured
@@ -873,6 +893,167 @@ async function saveCredentials() {
   }
 }
 
+function setLoginFeedback(message, kind = 'pending', linkUrl = null) {
+  const el = $('loginFeedback');
+  el.hidden = false;
+  el.className = `login-feedback is-${kind}`;
+  el.replaceChildren();
+  el.appendChild(document.createTextNode(message));
+  if (linkUrl) {
+    el.appendChild(document.createTextNode(' '));
+    const link = document.createElement('a');
+    link.href = linkUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = '打开授权页';
+    link.style.color = 'inherit';
+    link.style.textDecoration = 'underline';
+    el.appendChild(link);
+  }
+}
+
+function renderLoginAccount(user) {
+  const el = $('loginAccount');
+  if (!user) {
+    el.hidden = true;
+    el.replaceChildren();
+    return;
+  }
+  el.hidden = false;
+  el.replaceChildren();
+
+  const avatar = document.createElement('span');
+  avatar.className = 'avatar';
+  avatar.textContent = String(user.username || user.email || '?').slice(0, 1).toUpperCase();
+
+  const who = document.createElement('div');
+  who.className = 'who';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = user.username || user.email || '已连接';
+  who.appendChild(name);
+  if (user.email && user.email !== name.textContent) {
+    const email = document.createElement('span');
+    email.className = 'email';
+    email.textContent = user.email;
+    who.appendChild(email);
+  }
+
+  el.append(avatar, who);
+}
+
+function finishLoginError(message) {
+  if (state.loginTimer) {
+    clearInterval(state.loginTimer);
+    state.loginTimer = null;
+  }
+  state.loginBusy = false;
+  const button = $('loginBtn');
+  setBusy(button, false);
+  button.disabled = !(state.status?.canAutoLogin ?? true);
+  button.querySelector('.btn-label').textContent = state.status?.user
+    ? '重新登录 / 切换账号'
+    : '使用 WorkBuddy 账号登录';
+  setLoginFeedback(message, 'error');
+  toast(message, 'error');
+}
+
+function pollLogin(loginState, popup) {
+  if (state.loginTimer) clearInterval(state.loginTimer);
+  let attempts = 0;
+  let stopped = false;
+
+  const stop = () => {
+    stopped = true;
+    if (state.loginTimer) {
+      clearInterval(state.loginTimer);
+      state.loginTimer = null;
+    }
+  };
+
+  state.loginTimer = setInterval(async () => {
+    if (stopped) return;
+    attempts += 1;
+    if (attempts > 150) {
+      stop();
+      finishLoginError('授权超时，请重试');
+      return;
+    }
+
+    try {
+      const data = await api(`/admin/login/status?state=${encodeURIComponent(loginState)}`);
+      if (data.status === 'success') {
+        stop();
+        state.loginBusy = false;
+        const button = $('loginBtn');
+        setBusy(button, false);
+        button.disabled = !(state.status?.canAutoLogin ?? true);
+        const who = data.user?.username || data.user?.email || '账号';
+        setLoginFeedback(
+          data.warning ? `登录成功，但${data.warning}` : `登录成功：${who}，token 已自动更新`,
+          data.warning ? 'pending' : 'success'
+        );
+        toast('账号登录成功，token 已自动更新', data.warning ? 'warn' : 'success');
+        try {
+          popup?.close();
+        } catch {
+          /* ignore */
+        }
+        await refreshStatus();
+        await loadModels();
+        return;
+      }
+
+      if (data.status === 'error') {
+        stop();
+        finishLoginError(data.error || '登录失败');
+      }
+    } catch (err) {
+      stop();
+      finishLoginError(err.message);
+    }
+  }, 2000);
+}
+
+async function startLogin() {
+  if (state.loginBusy) return;
+
+  // Open the popup synchronously so the browser treats it as a user gesture.
+  let popup = null;
+  try {
+    popup = window.open('about:blank', '_blank');
+  } catch {
+    popup = null;
+  }
+
+  state.loginBusy = true;
+  const button = $('loginBtn');
+  setBusy(button, true);
+  button.querySelector('.btn-label').textContent = '正在打开授权页…';
+  setLoginFeedback('正在创建登录会话…', 'pending');
+
+  try {
+    const data = await api('/admin/login/start', { method: 'POST' });
+    if (popup) {
+      popup.location.href = data.authUrl;
+      setLoginFeedback('等待浏览器授权… 完成登录后会自动更新', 'pending');
+    } else {
+      setLoginFeedback('浏览器拦截了新窗口，请点击“打开授权页”完成登录。', 'pending', data.authUrl);
+    }
+    pollLogin(data.state, popup);
+  } catch (err) {
+    if (popup) {
+      try {
+        popup.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (/设备|device/i.test(err.message)) $('manualToken').open = true;
+    finishLoginError(err.message);
+  }
+}
+
 async function generateKey(showToast = true) {
   try {
     const data = await api('/admin/key', { method: 'POST' });
@@ -1032,6 +1213,7 @@ function bind() {
   });
 
   $('saveBtn').addEventListener('click', saveCredentials);
+  $('loginBtn').addEventListener('click', startLogin);
   $('genKeyBtn').addEventListener('click', () => generateKey());
   $('regenBtn').addEventListener('click', () => generateKey());
   $('startBtn').addEventListener('click', startProxy);
