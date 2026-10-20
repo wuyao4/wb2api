@@ -1,9 +1,11 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, saveConfig, CONFIG_PATH } from './config.js';
 import { WorkBuddyClient } from './workbuddy.js';
+import { AccountPool } from './pool.js';
 import { log, warn, error } from './logger.js';
 import { prepareChatBody, relayOpenAIStream, collectOpenAICompletion } from './openai.js';
 import {
@@ -38,6 +40,7 @@ function persist(updated) {
 }
 
 const client = new WorkBuddyClient(config, (updated) => persist(updated));
+const pool = new AccountPool(config, client, (updated) => persist(updated));
 const loginStates = new Map();
 const loginInflight = new Map();
 
@@ -188,12 +191,13 @@ async function handleOpenAIChat(req, res) {
   const upstreamModel = client.resolveModel(requestedModel);
   const upstreamBody = prepareChatBody(config, body, upstreamModel);
   const conversationId = req.headers['x-conversation-id'] || body.conversation_id;
+  const sessionKey = pool.sessionKey(req.headers, upstreamBody);
   const signal = abortOnDisconnect(res);
   const started = Date.now();
 
   let slot;
   try {
-    slot = await client.chat(upstreamBody, { signal, conversationId });
+    slot = await pool.chat(upstreamBody, { signal, conversationId }, sessionKey);
   } catch (err) {
     if (signal.aborted) return;
     warn(`chat failed before response: ${err.message}`);
@@ -202,14 +206,14 @@ async function handleOpenAIChat(req, res) {
       model: requestedModel,
       upstreamModel,
       stream: !!body.stream,
-      status: 502,
+      status: err.status || 502,
       durationMs: Date.now() - started,
       error: err.message
     });
-    return sendOpenAIError(res, 502, err.message, { type: 'upstream_connection_error' });
+    return sendOpenAIError(res, err.status || 502, err.message, { type: 'upstream_connection_error' });
   }
 
-  const { res: upstream, release, model } = slot;
+  const { res: upstream, release, model, account } = slot;
   let usage = null;
   let errorMessage = null;
   let firstTokenMs = null;
@@ -273,6 +277,7 @@ async function handleOpenAIChat(req, res) {
       kind: 'chat',
       model: requestedModel,
       upstreamModel: model,
+      account: account?.label || '',
       stream: !!body.stream,
       status: res.statusCode || 200,
       durationMs: Date.now() - started,
@@ -285,6 +290,7 @@ async function handleOpenAIChat(req, res) {
       const parts = [
         `${res.statusCode || 200}`,
         `model=${requestedModel}${requestedModel !== model ? `->${model}` : ''}`,
+        `account=${account?.label || '-'}`,
         `stream=${!!body.stream}`,
         `${Date.now() - started}ms`
       ];
@@ -309,12 +315,13 @@ async function handleAnthropicMessages(req, res) {
   const upstreamModel = client.resolveModel(requestedModel);
   const converted = anthropicToOpenAI(request);
   const upstreamBody = prepareChatBody(config, converted, upstreamModel);
+  const sessionKey = pool.sessionKey(req.headers, upstreamBody);
   const signal = abortOnDisconnect(res);
   const started = Date.now();
 
   let slot;
   try {
-    slot = await client.chat(upstreamBody, { signal });
+    slot = await pool.chat(upstreamBody, { signal }, sessionKey);
   } catch (err) {
     if (signal.aborted) return;
     warn(`messages failed before response: ${err.message}`);
@@ -323,14 +330,14 @@ async function handleAnthropicMessages(req, res) {
       model: requestedModel,
       upstreamModel,
       stream: !!request.stream,
-      status: 502,
+      status: err.status || 502,
       durationMs: Date.now() - started,
       error: err.message
     });
-    return anthropicError(res, 502, err.message);
+    return anthropicError(res, err.status || 502, err.message);
   }
 
-  const { res: upstream, release } = slot;
+  const { res: upstream, release, account } = slot;
   let usage = null;
   let errorMessage = null;
   let firstTokenMs = null;
@@ -384,6 +391,7 @@ async function handleAnthropicMessages(req, res) {
       kind: 'messages',
       model: requestedModel,
       upstreamModel,
+      account: account?.label || '',
       stream: !!request.stream,
       status: res.statusCode || 200,
       durationMs: Date.now() - started,
@@ -396,6 +404,7 @@ async function handleAnthropicMessages(req, res) {
       const parts = [
         `${res.statusCode || 200}`,
         `model=${requestedModel}`,
+        `account=${account?.label || '-'}`,
         `stream=${!!request.stream}`,
         `${Date.now() - started}ms`
       ];
@@ -434,6 +443,13 @@ async function handleAdminStatus(req, res) {
       hasRefreshToken: !!config.upstream.refreshToken,
       maskedAccessToken: maskToken(config.upstream.accessToken)
     },
+    accounts: pool.status(),
+    routing: {
+      sessionAffinity: config.routing?.sessionAffinity !== false,
+      affinityTtlMinutes: config.routing?.affinityTtlMinutes,
+      failover: config.routing?.failover !== false,
+      sessions: pool.sessionCount()
+    },
     stats: getStats(),
     config: {
       configPath: CONFIG_PATH,
@@ -445,10 +461,10 @@ async function handleAdminStatus(req, res) {
   });
 }
 
-function pluginHeaders() {
+function pluginHeaders(deviceToken = config.upstream.deviceToken) {
   const upstream = config.upstream;
   return {
-    'X-Device-Token': upstream.deviceToken,
+    'X-Device-Token': deviceToken,
     'X-No-Authorization': 'true',
     'X-Product': upstream.product || 'SaaS',
     'X-Domain': upstream.domain || 'www.workbuddy.ai',
@@ -521,6 +537,7 @@ async function applyCredentialSource(source, overrides = {}) {
   config.upstream.userId = candidate.upstream.userId;
   persist(config);
   client.setConfig(config);
+  pool.setConfig(config, { rebuild: false });
 
   log(`credentials saved for ${profile?.username || profile?.sub || 'unknown user'}`);
 
@@ -531,6 +548,120 @@ async function applyCredentialSource(source, overrides = {}) {
     token: {
       expiresAt: expiresAt ? new Date(expiresAt * 1000).toISOString() : null,
       hasRefreshToken: !!config.upstream.refreshToken
+    }
+  };
+}
+
+async function applyTokensToAccount(accountId, accessToken, refreshToken, deviceToken, label) {
+  config.accounts = config.accounts || [];
+  const entry = accountId ? config.accounts.find((account) => account.id === accountId) : null;
+  if (accountId && !entry) {
+    throw Object.assign(new Error('账号不存在，可能已被删除'), { status: 404 });
+  }
+
+  const maxConcurrency =
+    Number(entry?.maxConcurrency) > 0
+      ? Number(entry.maxConcurrency)
+      : Number(config.routing?.defaultAccountConcurrency) || 2;
+
+  const targetConfig = structuredClone(config);
+  targetConfig.upstream = {
+    ...config.upstream,
+    accessToken: accessToken || entry?.accessToken || '',
+    refreshToken: refreshToken || entry?.refreshToken || '',
+    deviceToken: deviceToken || entry?.deviceToken || config.upstream.deviceToken,
+    userId: entry?.userId || '',
+    maxConcurrency
+  };
+
+  const temp = new WorkBuddyClient(targetConfig, () => {});
+  let warning = null;
+
+  if (targetConfig.upstream.refreshToken) {
+    try {
+      await temp.refreshToken();
+    } catch (err) {
+      warning = `刷新令牌不可用：${err.message}`;
+      if (!targetConfig.upstream.accessToken) {
+        throw Object.assign(new Error(warning), { status: 400 });
+      }
+    }
+  }
+
+  if (!targetConfig.upstream.accessToken) {
+    throw Object.assign(new Error('未能获得可用的 access token。'), { status: 400 });
+  }
+
+  try {
+    await temp.fetchProductConfigStrict();
+  } catch (err) {
+    throw Object.assign(new Error(`Token 校验失败：${err.message}`), { status: 400 });
+  }
+
+  const profile = profileFromToken(temp.upstream.accessToken);
+
+  // Re-adding the same WorkBuddy account should update it instead of creating
+  // a duplicate pool entry.
+  let target = entry;
+  if (!target && profile?.sub) {
+    if (config.upstream.userId === profile.sub) {
+      config.upstream.accessToken = temp.upstream.accessToken;
+      config.upstream.refreshToken = temp.upstream.refreshToken;
+      config.upstream.deviceToken = temp.upstream.deviceToken;
+      config.upstream.userId = profile.sub;
+      persist(config);
+      client.setConfig(config);
+      pool.setConfig(config, { rebuild: false });
+      const expiresAt = temp.tokenExpiresAt();
+      const label = config.upstream.label || '主账号';
+      log(`primary account updated (${profile.username || profile.sub})`);
+      return {
+        warning,
+        accountId: 'primary',
+        label,
+        user: { username: profile.username, email: profile.email, sub: profile.sub },
+        token: {
+          expiresAt: expiresAt ? new Date(expiresAt * 1000).toISOString() : null,
+          hasRefreshToken: !!config.upstream.refreshToken
+        }
+      };
+    }
+    target = (config.accounts || []).find((account) => account.userId === profile.sub) || null;
+  }
+
+  const data = {
+    accessToken: temp.upstream.accessToken,
+    refreshToken: temp.upstream.refreshToken,
+    deviceToken: temp.upstream.deviceToken,
+    userId: profile?.sub || target?.userId || '',
+    label: target?.label || label || profile?.username || 'WorkBuddy 账号'
+  };
+
+  let id;
+  if (target) {
+    Object.assign(target, data);
+    id = target.id;
+  } else {
+    id = randomUUID();
+    config.accounts.push({ id, enabled: true, maxConcurrency, ...data });
+  }
+
+  persist(config);
+  pool.setConfig(config, { rebuild: true });
+
+  const expiresAt = temp.tokenExpiresAt();
+  log(`account ${data.label} saved (${profile?.username || profile?.sub || 'unknown'})`);
+
+  return {
+    warning,
+    accountId: id,
+    label: data.label,
+    user: profile
+      ? { username: profile.username, email: profile.email, sub: profile.sub }
+      : null,
+    token: {
+      expiresAt: expiresAt ? new Date(expiresAt * 1000).toISOString() : null,
+      hasRefreshToken: !!data.refreshToken
     }
   };
 }
@@ -550,13 +681,30 @@ async function handleCredentials(req, res) {
 
 async function handleLoginStart(req, res) {
   pruneLoginStates();
-  if (!config.upstream.deviceToken) {
+  const body = await readJson(req);
+  const createNew = Boolean(body.createNew);
+  const accountId = createNew ? null : String(body.accountId || 'primary');
+
+  let targetAccount = null;
+  if (!createNew && accountId !== 'primary') {
+    targetAccount = (config.accounts || []).find((account) => account.id === accountId);
+    if (!targetAccount) {
+      return sendJson(res, 404, { ok: false, status: 'error', error: '账号不存在' });
+    }
+  }
+
+  const deviceToken = targetAccount?.deviceToken || config.upstream.deviceToken;
+  if (!deviceToken) {
     return sendJson(res, 400, {
       ok: false,
       status: 'error',
       error: '缺少设备 Token（X-Device-Token），请先在“手动填写 Token”里保存一次包含设备信息的凭据。'
     });
   }
+
+  const label = createNew
+    ? String(body.label || '')
+    : targetAccount?.label || config.upstream.label || '主账号';
 
   const base = config.upstream.baseUrl.replace(/\/+$/, '');
   let origin = 'https://www.workbuddy.ai';
@@ -570,7 +718,7 @@ async function handleLoginStart(req, res) {
   try {
     const response = await fetch(
       `${base}/v2/plugin/auth/state?platform=workbuddy-ai&version=${encodeURIComponent(version)}`,
-      { method: 'POST', headers: pluginHeaders(), signal: AbortSignal.timeout(20000) }
+      { method: 'POST', headers: pluginHeaders(deviceToken), signal: AbortSignal.timeout(20000) }
     );
     const text = await response.text();
     let json = null;
@@ -585,8 +733,19 @@ async function handleLoginStart(req, res) {
     const authUrl = String(json.data.authUrl);
     if (!authUrl.startsWith(`${origin}/`)) throw new Error('上游返回了非预期的授权地址');
 
-    loginStates.set(json.data.state, { at: Date.now() });
-    sendJson(res, 200, { ok: true, state: json.data.state, authUrl });
+    loginStates.set(json.data.state, {
+      at: Date.now(),
+      accountId,
+      createNew,
+      label,
+      deviceToken
+    });
+    sendJson(res, 200, {
+      ok: true,
+      state: json.data.state,
+      authUrl,
+      mode: createNew ? 'new' : accountId
+    });
   } catch (err) {
     sendJson(res, 502, { ok: false, status: 'error', error: err.message });
   }
@@ -614,7 +773,7 @@ async function handleLoginStatus(req, res) {
   if (session.error) {
     return sendJson(res, 502, { ok: false, status: 'error', error: session.error });
   }
-  if (!config.upstream.deviceToken) {
+  if (!session.deviceToken) {
     return sendJson(res, 400, { ok: false, status: 'error', error: '缺少设备 Token' });
   }
 
@@ -631,7 +790,7 @@ async function handleLoginStatus(req, res) {
     const base = config.upstream.baseUrl.replace(/\/+$/, '');
     const response = await fetch(
       `${base}/v2/plugin/auth/token?state=${encodeURIComponent(state)}`,
-      { headers: pluginHeaders(), signal: AbortSignal.timeout(20000) }
+      { headers: pluginHeaders(session.deviceToken), signal: AbortSignal.timeout(20000) }
     );
     const text = await response.text();
     let json = null;
@@ -650,13 +809,29 @@ async function handleLoginStatus(req, res) {
     const refreshToken = json?.data?.refreshToken || json?.data?.refresh_token;
     if (!accessToken) throw new Error('登录已完成，但上游没有返回 access token');
 
-    const source = [
-      `Authorization: Bearer ${accessToken}`,
-      refreshToken ? `X-Refresh-Token: ${refreshToken}` : ''
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const result = await applyCredentialSource(source);
+    let result;
+    if (session.createNew || (session.accountId && session.accountId !== 'primary')) {
+      result = await applyTokensToAccount(
+        session.accountId,
+        accessToken,
+        refreshToken,
+        session.deviceToken,
+        session.label
+      );
+    } else {
+      const source = [
+        `Authorization: Bearer ${accessToken}`,
+        refreshToken ? `X-Refresh-Token: ${refreshToken}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n');
+      result = await applyCredentialSource(source);
+      result = {
+        ...result,
+        accountId: 'primary',
+        label: config.upstream.label || '主账号'
+      };
+    }
     return { status: 'success', ...result };
   })();
 
@@ -673,29 +848,117 @@ async function handleLoginStatus(req, res) {
   }
 }
 
+async function handleAccountToggle(req, res) {
+  const body = await readJson(req);
+  const id = String(body.id || '');
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少账号 id' });
+  const enabled = body.enabled !== false;
+
+  if (id === 'primary') {
+    config.upstream.enabled = enabled;
+  } else {
+    const entry = (config.accounts || []).find((account) => account.id === id);
+    if (!entry) return sendJson(res, 404, { ok: false, error: '账号不存在' });
+    entry.enabled = enabled;
+  }
+
+  persist(config);
+  pool.setConfig(config, { rebuild: true });
+  sendJson(res, 200, { ok: true, accounts: pool.status() });
+}
+
+async function handleAccountUpdate(req, res) {
+  const body = await readJson(req);
+  const id = String(body.id || '');
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少账号 id' });
+
+  const label = typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '';
+  const maxConcurrency = Number(body.maxConcurrency);
+  if (body.maxConcurrency !== undefined && (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 20)) {
+    return sendJson(res, 400, { ok: false, error: 'maxConcurrency 必须是 1-20 的整数' });
+  }
+
+  if (id === 'primary') {
+    if (label) config.upstream.label = label;
+    if (body.maxConcurrency !== undefined) config.upstream.maxConcurrency = maxConcurrency;
+    persist(config);
+    client.setConfig(config);
+    pool.setConfig(config, { rebuild: false });
+  } else {
+    const entry = (config.accounts || []).find((account) => account.id === id);
+    if (!entry) return sendJson(res, 404, { ok: false, error: '账号不存在' });
+    if (label) entry.label = label;
+    if (body.maxConcurrency !== undefined) entry.maxConcurrency = maxConcurrency;
+    persist(config);
+    pool.setConfig(config, { rebuild: true });
+  }
+
+  sendJson(res, 200, { ok: true, accounts: pool.status() });
+}
+
+async function handleAccountRemove(req, res) {
+  const body = await readJson(req);
+  const id = String(body.id || '');
+  if (!id) return sendJson(res, 400, { ok: false, error: '缺少账号 id' });
+  if (id === 'primary') {
+    return sendJson(res, 400, { ok: false, error: '主账号不能删除，可以停用' });
+  }
+
+  const index = (config.accounts || []).findIndex((account) => account.id === id);
+  if (index === -1) return sendJson(res, 404, { ok: false, error: '账号不存在' });
+  config.accounts.splice(index, 1);
+  persist(config);
+  pool.dropAccountSessions(id);
+  pool.setConfig(config, { rebuild: true });
+  sendJson(res, 200, { ok: true, accounts: pool.status() });
+}
+
 async function handleStart(req, res) {
   const body = await readJson(req);
 
-  if (!config.upstream.accessToken && !config.upstream.refreshToken) {
-    return sendJson(res, 400, { ok: false, error: '请先填写并保存 WorkBuddy Token。' });
+  const startAccounts = pool
+    .all()
+    .filter(
+      (account) =>
+        account.enabled &&
+        (account.client.upstream.accessToken || account.client.upstream.refreshToken)
+    );
+  if (!startAccounts.length) {
+    return sendJson(res, 400, { ok: false, error: '请先登录或添加至少一个 WorkBuddy 账号。' });
   }
 
-  if (config.upstream.refreshToken) {
-    try {
-      await client.refreshToken();
-    } catch (err) {
-      if (!config.upstream.accessToken) {
-        return sendJson(res, 400, { ok: false, error: `Token 刷新失败：${err.message}` });
+  const startAccount = startAccounts.find((account) => account.isPrimary) || startAccounts[0];
+  let startClient = startAccount.client;
+  let productConfig = null;
+  let startError = null;
+
+  for (const account of startAccounts) {
+    const candidate = account.client;
+    if (candidate.upstream.refreshToken) {
+      try {
+        await candidate.refreshToken();
+      } catch (err) {
+        if (!candidate.upstream.accessToken) {
+          startError = err;
+          continue;
+        }
+        warn(`refresh during start failed, using existing access token: ${err.message}`);
       }
-      warn(`refresh during start failed, using existing access token: ${err.message}`);
+    }
+    try {
+      productConfig = await candidate.fetchProductConfigStrict();
+      startClient = candidate;
+      break;
+    } catch (err) {
+      startError = err;
     }
   }
 
-  let productConfig;
-  try {
-    productConfig = await client.fetchProductConfigStrict();
-  } catch (err) {
-    return sendJson(res, 400, { ok: false, error: `凭据校验失败：${err.message}` });
+  if (!productConfig) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: `凭据校验失败：${startError?.message || '没有可用账号'}`
+    });
   }
 
   const models = Array.isArray(productConfig.models) ? productConfig.models : [];
@@ -798,6 +1061,7 @@ function handleAdminReload(req, res) {
   try {
     config = loadConfig();
     client.setConfig(config);
+    pool.setConfig(config, { rebuild: true });
     sendJson(res, 200, { ok: true, configPath: CONFIG_PATH });
   } catch (err) {
     sendJson(res, 500, { ok: false, error: err.message });
@@ -837,6 +1101,9 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && pathname === '/admin/credentials') return await handleCredentials(req, res);
       if (req.method === 'POST' && pathname === '/admin/login/start') return await handleLoginStart(req, res);
       if (req.method === 'GET' && pathname === '/admin/login/status') return await handleLoginStatus(req, res);
+      if (req.method === 'POST' && pathname === '/admin/accounts/toggle') return await handleAccountToggle(req, res);
+      if (req.method === 'POST' && pathname === '/admin/accounts/update') return await handleAccountUpdate(req, res);
+      if (req.method === 'POST' && pathname === '/admin/accounts/remove') return await handleAccountRemove(req, res);
       if (req.method === 'POST' && pathname === '/admin/start') return await handleStart(req, res);
       if (req.method === 'POST' && pathname === '/admin/stop') return handleStop(req, res);
       if (req.method === 'POST' && pathname === '/admin/key') return handleGenerateKey(req, res);

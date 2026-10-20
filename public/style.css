@@ -1236,6 +1236,138 @@ input::placeholder {
    stats + logs
    -------------------------------------------------------------------------- */
 
+.accounts-card {
+  min-height: 0;
+}
+
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.account-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: #0d1118;
+}
+
+.account-row.is-disabled {
+  opacity: 0.55;
+}
+
+.account-row.is-cooling {
+  border-color: rgba(229, 180, 84, 0.26);
+}
+
+.account-row .avatar {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(92, 108, 242, 0.14);
+  color: #c7cdff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.account-row .who {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.account-row .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.account-row .meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--muted-2);
+}
+
+.account-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.account-badge {
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted-2);
+  font-size: 8.5px;
+  line-height: 1.4;
+}
+
+.account-badge.primary {
+  color: #c7cdff;
+  border-color: rgba(92, 108, 242, 0.3);
+  background: rgba(92, 108, 242, 0.08);
+}
+
+.account-badge.cooling {
+  color: #d8c391;
+  border-color: rgba(229, 180, 84, 0.26);
+  background: rgba(229, 180, 84, 0.06);
+}
+
+.account-badge.off {
+  color: #e9a4ae;
+  border-color: rgba(229, 103, 122, 0.24);
+  background: rgba(229, 103, 122, 0.05);
+}
+
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.account-actions .ghost {
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 9.5px;
+}
+
+.account-actions .ghost.danger {
+  color: #e9a4ae;
+}
+
+.account-empty {
+  padding: 16px 10px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted-2);
+}
+
+.account-foot {
+  margin-top: 8px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
 .stats-head {
   display: flex;
   align-items: flex-start;

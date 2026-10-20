@@ -40,7 +40,25 @@ export const DEFAULT_CONFIG = {
     // Refresh the access token this many seconds before it expires.
     refreshSkewSeconds: 600,
     // How long we wait for response headers from upstream.
-    headerTimeoutMs: 120000
+    headerTimeoutMs: 120000,
+    // Set to false to take this account out of the pool.
+    enabled: true,
+    label: '主账号'
+  },
+  // Additional WorkBuddy accounts. The primary account lives in `upstream`.
+  accounts: [],
+  routing: {
+    // Keep the same account for a conversation when possible.
+    sessionAffinity: true,
+    affinityTtlMinutes: 60,
+    maxSessions: 5000,
+    // prefer: switch accounts if the sticky account is cooling down.
+    // wait: keep the sticky account and let it wait out the cooldown.
+    affinityOnCooldown: 'prefer',
+    // Try another account once when the first one returns 429.
+    failover: true,
+    // Default per-account concurrency for added accounts.
+    defaultAccountConcurrency: 2
   },
   models: {
     default: 'deepseek-v4.1-flash',

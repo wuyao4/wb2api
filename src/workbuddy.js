@@ -111,11 +111,24 @@ export class WorkBuddyClient {
   #cooldownUntil = 0;
   #models = null;
   #modelsFetchedAt = 0;
+  inflight = 0;
 
   constructor(config, save) {
     this.config = config;
     this.save = save;
     this.semaphore = new Semaphore(config.upstream.maxConcurrency);
+  }
+
+  get inflightCount() {
+    return this.inflight;
+  }
+
+  get cooldownUntil() {
+    return this.#cooldownUntil;
+  }
+
+  isCoolingDown() {
+    return this.#cooldownUntil > Date.now();
   }
 
   setConfig(config) {
@@ -281,6 +294,7 @@ export class WorkBuddyClient {
 
   async chat(body, options = {}) {
     await this.ensureToken();
+    this.inflight += 1;
 
     const retry = this.config.retry || {};
     const maxAttempts = Math.max(1, Number(retry.maxAttempts) || 1);
@@ -303,6 +317,7 @@ export class WorkBuddyClient {
         res = await this.#postChat(payload, options);
       } catch (err) {
         this.semaphore.release();
+        this.inflight = Math.max(0, this.inflight - 1);
         throw err;
       }
 
@@ -311,7 +326,12 @@ export class WorkBuddyClient {
         this.semaphore.release();
         await res.text().catch(() => '');
         warn('upstream returned 401, refreshing token');
-        await this.refreshToken();
+        try {
+          await this.refreshToken();
+        } catch (err) {
+          this.inflight = Math.max(0, this.inflight - 1);
+          throw err;
+        }
         attempt -= 1;
         continue;
       }
@@ -327,7 +347,12 @@ export class WorkBuddyClient {
           this.#cooldownUntil = Math.max(this.#cooldownUntil, Date.now() + delay);
         }
         warn(`upstream ${res.status} (${info.code ?? '-'} ${info.message}) on ${model}, retry ${attempt}/${maxAttempts - 1} in ${delay}ms`);
-        await sleep(delay, signal);
+        try {
+          await sleep(delay, signal);
+        } catch (err) {
+          this.inflight = Math.max(0, this.inflight - 1);
+          throw err;
+        }
         continue;
       }
 
@@ -348,7 +373,17 @@ export class WorkBuddyClient {
 
       // The caller owns the semaphore slot from here and must release it once
       // the response body has been consumed.
-      return { res, release: () => this.semaphore.release(), model };
+      let released = false;
+      return {
+        res,
+        model,
+        release: () => {
+          if (released) return;
+          released = true;
+          this.semaphore.release();
+          this.inflight = Math.max(0, this.inflight - 1);
+        }
+      };
     }
   }
 

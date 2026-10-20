@@ -567,9 +567,16 @@ function renderStatus() {
     }
   }
   renderLoginAccount(s.user);
+  renderAccounts(s.accounts || []);
+  $('addAccountBtn').disabled = state.loginBusy || !canAutoLogin;
+  $('accountFoot').textContent = `同一会话优先使用同一账号 · 当前保持 ${s.routing?.sessions ?? 0} 个会话`;
 
-  $('userLine').textContent = s.user?.username
-    ? `${s.user.username}${s.user.email ? ` · ${s.user.email}` : ''}`
+  const userName = s.user?.username;
+  const userEmail = s.user?.email;
+  $('userLine').textContent = userName
+    ? userEmail && userEmail !== userName
+      ? `${userName} · ${userEmail}`
+      : userName
     : configured
       ? '已连接 WorkBuddy'
       : '未连接账号';
@@ -942,6 +949,135 @@ function renderLoginAccount(user) {
   el.append(avatar, who);
 }
 
+function renderAccounts(accounts) {
+  const list = $('accountList');
+  list.replaceChildren();
+
+  if (!accounts.length) {
+    const empty = document.createElement('div');
+    empty.className = 'account-empty';
+    empty.textContent = '暂无账号';
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const account of accounts) {
+    const row = document.createElement('div');
+    row.className = 'account-row';
+    if (account.enabled === false) row.classList.add('is-disabled');
+    if (account.coolingDown) row.classList.add('is-cooling');
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = String(account.username || account.email || account.label || '?')
+      .slice(0, 1)
+      .toUpperCase();
+
+    const who = document.createElement('div');
+    who.className = 'who';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = account.username || account.label || account.id;
+    who.appendChild(name);
+
+    const metaParts = [];
+    if (account.email && account.email !== name.textContent) metaParts.push(account.email);
+    metaParts.push(`并发 ${account.load ?? 0}/${account.maxConcurrency ?? 1}`);
+    if (account.sessions) metaParts.push(`会话 ${account.sessions}`);
+    if (account.expiresAt) {
+      metaParts.push(`到期 ${new Date(account.expiresAt).toLocaleDateString('zh-CN')}`);
+    }
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = metaParts.join(' · ');
+    who.appendChild(meta);
+
+    const badges = document.createElement('div');
+    badges.className = 'account-badges';
+    if (account.isPrimary) {
+      const badge = document.createElement('span');
+      badge.className = 'account-badge primary';
+      badge.textContent = '主账号';
+      badges.appendChild(badge);
+    }
+    if (account.coolingDown) {
+      const badge = document.createElement('span');
+      badge.className = 'account-badge cooling';
+      badge.textContent = '冷却中';
+      badges.appendChild(badge);
+    }
+    if (account.enabled === false) {
+      const badge = document.createElement('span');
+      badge.className = 'account-badge off';
+      badge.textContent = '已停用';
+      badges.appendChild(badge);
+    }
+    if (badges.childElementCount) who.appendChild(badges);
+
+    const actions = document.createElement('div');
+    actions.className = 'account-actions';
+
+    const login = document.createElement('button');
+    login.type = 'button';
+    login.className = 'ghost mini';
+    login.textContent = '登录';
+    login.title = '重新走一次 WorkBuddy 授权';
+    login.disabled = state.loginBusy;
+    login.addEventListener('click', () => startLogin({ accountId: account.id }));
+    actions.appendChild(login);
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'ghost mini';
+    toggle.textContent = account.enabled === false ? '启用' : '停用';
+    toggle.disabled = state.loginBusy;
+    toggle.addEventListener('click', () => toggleAccount(account.id, account.enabled === false));
+    actions.appendChild(toggle);
+
+    if (!account.isPrimary) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'ghost mini danger';
+      remove.textContent = '删除';
+      remove.disabled = state.loginBusy;
+      remove.addEventListener('click', () => removeAccount(account.id));
+      actions.appendChild(remove);
+    }
+
+    row.append(avatar, who, actions);
+    list.appendChild(row);
+  }
+}
+
+async function toggleAccount(id, enabled) {
+  if (state.loginBusy) return;
+  try {
+    await api('/admin/accounts/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ id, enabled })
+    });
+    toast(enabled ? '账号已启用' : '账号已停用', 'success');
+    await refreshStatus();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function removeAccount(id) {
+  if (state.loginBusy) return;
+  if (!window.confirm('确定删除这个账号？')) return;
+  try {
+    await api('/admin/accounts/remove', {
+      method: 'POST',
+      body: JSON.stringify({ id })
+    });
+    toast('账号已删除', 'success');
+    await refreshStatus();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
 function finishLoginError(message) {
   if (state.loginTimer) {
     clearInterval(state.loginTimer);
@@ -954,11 +1090,13 @@ function finishLoginError(message) {
   button.querySelector('.btn-label').textContent = state.status?.user
     ? '重新登录 / 切换账号'
     : '使用 WorkBuddy 账号登录';
+  $('addAccountBtn').disabled = !(state.status?.canAutoLogin ?? true);
+  renderAccounts(state.status?.accounts || []);
   setLoginFeedback(message, 'error');
   toast(message, 'error');
 }
 
-function pollLogin(loginState, popup) {
+function pollLogin(loginState, popup, target = {}) {
   if (state.loginTimer) clearInterval(state.loginTimer);
   let attempts = 0;
   let stopped = false;
@@ -988,12 +1126,14 @@ function pollLogin(loginState, popup) {
         const button = $('loginBtn');
         setBusy(button, false);
         button.disabled = !(state.status?.canAutoLogin ?? true);
+        $('addAccountBtn').disabled = !(state.status?.canAutoLogin ?? true);
         const who = data.user?.username || data.user?.email || '账号';
+        const action = target.createNew ? '账号已添加' : '登录成功';
         setLoginFeedback(
-          data.warning ? `登录成功，但${data.warning}` : `登录成功：${who}，token 已自动更新`,
+          data.warning ? `${action}，但${data.warning}` : `${action}：${who}，token 已自动更新`,
           data.warning ? 'pending' : 'success'
         );
-        toast('账号登录成功，token 已自动更新', data.warning ? 'warn' : 'success');
+        toast(target.createNew ? '账号已添加' : '账号登录成功，token 已自动更新', data.warning ? 'warn' : 'success');
         try {
           popup?.close();
         } catch {
@@ -1015,7 +1155,7 @@ function pollLogin(loginState, popup) {
   }, 2000);
 }
 
-async function startLogin() {
+async function startLogin(target = {}) {
   if (state.loginBusy) return;
 
   // Open the popup synchronously so the browser treats it as a user gesture.
@@ -1030,17 +1170,25 @@ async function startLogin() {
   const button = $('loginBtn');
   setBusy(button, true);
   button.querySelector('.btn-label').textContent = '正在打开授权页…';
-  setLoginFeedback('正在创建登录会话…', 'pending');
+  $('addAccountBtn').disabled = true;
+  renderAccounts(state.status?.accounts || []);
+  setLoginFeedback(
+    target.createNew ? '正在添加账号，请完成浏览器授权…' : '正在创建登录会话…',
+    'pending'
+  );
 
   try {
-    const data = await api('/admin/login/start', { method: 'POST' });
+    const data = await api('/admin/login/start', {
+      method: 'POST',
+      body: JSON.stringify(target)
+    });
     if (popup) {
       popup.location.href = data.authUrl;
       setLoginFeedback('等待浏览器授权… 完成登录后会自动更新', 'pending');
     } else {
       setLoginFeedback('浏览器拦截了新窗口，请点击“打开授权页”完成登录。', 'pending', data.authUrl);
     }
-    pollLogin(data.state, popup);
+    pollLogin(data.state, popup, target);
   } catch (err) {
     if (popup) {
       try {
@@ -1137,6 +1285,7 @@ function renderLogs(logs) {
     row.className = 'log-row';
     const titleParts = [];
     if (entry.error) titleParts.push(entry.error);
+    if (entry.account) titleParts.push(`账号 ${entry.account}`);
     if (entry.ttfbMs != null) titleParts.push(`首包 ${entry.ttfbMs}ms`);
     titleParts.push(`总耗时 ${entry.durationMs}ms`);
     row.title = titleParts.join(' · ');
@@ -1213,7 +1362,8 @@ function bind() {
   });
 
   $('saveBtn').addEventListener('click', saveCredentials);
-  $('loginBtn').addEventListener('click', startLogin);
+  $('loginBtn').addEventListener('click', () => startLogin({ accountId: 'primary' }));
+  $('addAccountBtn').addEventListener('click', () => startLogin({ createNew: true }));
   $('genKeyBtn').addEventListener('click', () => generateKey());
   $('regenBtn').addEventListener('click', () => generateKey());
   $('startBtn').addEventListener('click', startProxy);

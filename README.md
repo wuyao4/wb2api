@@ -28,6 +28,8 @@ npm start
 控制台功能：
 
 - 一键 WorkBuddy 账号登录，自动捕获桌面端 token 并显示账号
+- 多账号账号池：添加多个 WorkBuddy 账号分摊并发，同一会话自动保持
+- 账号级并发、冷却、会话数展示
 - 手动填写 Token 作为可选备用方式，自动解析 JWT、识别访问令牌 / 刷新令牌
 - 实时请求日志（模型、状态、耗时、token 用量）
 - 请求数 / 输入输出 token / 运行时长统计
@@ -142,6 +144,47 @@ Claude Code / Anthropic 协议：
 - Base URL：`http://127.0.0.1:8787`
 - 接口：`POST /v1/messages`，支持 `stream`、`tools`、`tool_use` / `tool_result` 转换。
 
+## 多账号与会话保持
+
+控制台「账号池」可以添加多个 WorkBuddy 账号：
+
+- 主账号使用 `upstream`，额外账号存放在 `accounts` 数组
+- 每个账号独立 token、刷新、冷却和并发；总并发约等于各账号 `maxConcurrency` 之和
+- 新请求优先选择负载最低且未冷却的账号
+- 同一会话优先使用同一个账号：
+  - 优先读取 `X-Session-ID`、`X-Conversation-ID`，或 body 里的 `session_id` / `conversation_id` / `user`
+  - 没有这些字段时，用第一条 user 消息的 SHA-256 作为会话键
+  - `routing.sessionAffinity: false` 可关闭；`affinityOnCooldown: wait` 为保持会话等待冷却，`prefer`（默认）在冷却时换号
+- 429 时会尝试另一个账号一次（`routing.failover`）
+- 账号卡片显示 user、到期时间、`load/max`、会话数、冷却 / 停用状态
+
+添加账号：点控制台「账号池」右上角「添加账号」→ 浏览器授权 → 自动加入账号池。重新登录某个账号点它右侧的「登录」；主账号不能删除，但可以停用。
+
+```jsonc
+"accounts": [
+  {
+    "id": "acc-...",
+    "label": "备用账号",
+    "enabled": true,
+    "maxConcurrency": 2,
+    "accessToken": "...",
+    "refreshToken": "...",
+    "deviceToken": "v3:...",
+    "userId": "..."
+  }
+],
+"routing": {
+  "sessionAffinity": true,
+  "affinityTtlMinutes": 60,
+  "maxSessions": 5000,
+  "affinityOnCooldown": "prefer",
+  "failover": true,
+  "defaultAccountConcurrency": 2
+}
+```
+
+`deviceToken` 可以共用同一台设备的；新增账号登录会复用主账号的 `deviceToken`。
+
 ## 接口
 
 | 方法 | 路径 | 说明 |
@@ -153,8 +196,11 @@ Claude Code / Anthropic 协议：
 | GET | `/healthz` | 健康检查 |
 | GET | `/admin/status` | 控制台状态、账号、统计 |
 | POST | `/admin/credentials` | 解析并保存 Token |
-| POST | `/admin/login/start` | 创建桌面登录 state 与授权地址 |
+| POST | `/admin/login/start` | 创建桌面登录 state 与授权地址（支持 `accountId` / `createNew`） |
 | GET | `/admin/login/status?state=...` | 轮询授权结果并自动保存 token |
+| POST | `/admin/accounts/toggle` | 启用 / 停用账号 |
+| POST | `/admin/accounts/update` | 修改账号标签 / 并发 |
+| POST | `/admin/accounts/remove` | 删除额外账号 |
 | POST | `/admin/start` | 启动 / 更新反代，生成 Key |
 | POST | `/admin/stop` | 停止反代 |
 | POST | `/admin/key` | 重新生成 API Key |

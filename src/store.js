@@ -17,6 +17,7 @@ export function recordRequest(entry) {
     kind: entry.kind || 'chat',
     model: entry.model || '',
     upstreamModel: entry.upstreamModel || '',
+    account: entry.account || '',
     stream: !!entry.stream,
     status: entry.status || 200,
     durationMs: entry.durationMs || 0,
