@@ -78,6 +78,13 @@ const CONNECT_META = {
     note: '腾讯 CodeBuddy 国内版：与 WorkBuddy 同一套浏览器授权流程，登录后自动写入 token。',
     suggestedModels: ['deepseek-v4.1-flash', 'glm-5.3-flash', 'kimi-k3']
   },
+  workbuddy: {
+    strategy: 'oauth',
+    oauth: 'workbuddy',
+    baseUrl: 'https://www.workbuddy.ai',
+    note: '腾讯 WorkBuddy：打开桌面端授权页完成登录，token 自动写入，可作为主账号或追加账号。',
+    suggestedModels: ['deepseek-v4.1-flash', 'glm-5.3-flash', 'kimi-k3']
+  },
   qoder: {
     strategy: 'oauth',
     oauth: 'qoder',
@@ -156,7 +163,8 @@ const OAUTH_NAMES = {
   'minimax-code': 'MiniMax Code',
   loomy: 'Loomy（讯飞）',
   lobsterai: 'LobsterAI（有道）',
-  codebuddy: 'CodeBuddy（腾讯）'
+  codebuddy: 'CodeBuddy（腾讯）',
+  workbuddy: 'WorkBuddy（腾讯）'
 };
 
 export function connectInfo(presetId) {

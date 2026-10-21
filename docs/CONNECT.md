@@ -9,15 +9,15 @@
 
 | 能力 | 数量 | 渠道 |
 | --- | --- | --- |
-| **真·一键**（点一下 → 浏览器授权 → 凭据自动写回） | **11** | OpenRouter、WorkBuddy、CodeBuddy、Cline、Qoder、Gemini Code Assist、TRAE、Raccoon、ZCode、MiniMax Code、Loomy、LobsterAI |
+| **真·一键**（点一下 → 浏览器授权 → 凭据自动写回） | **12** | OpenRouter、WorkBuddy、CodeBuddy、Cline、Qoder、Gemini Code Assist、TRAE、Raccoon、ZCode、MiniMax Code、Loomy、LobsterAI |
 | **半自动**（打开官方 Key 页 → 复制 → 自动捕获校验 → 一键启动） | 15 | Groq、DeepSeek、Gemini、SiliconFlow、NVIDIA、Cerebras、Mistral、Together、Fireworks、xAI、Moonshot、Z.ai、MiniMax、OpenCode Zen、Vercel |
 | **完全免密** | 4 | Kilo 免费池、Ollama、LM Studio、llama.cpp |
 
-合计 30 个渠道（OpenRouter 同时属于"一键"与预设；WorkBuddy / CodeBuddy 是两个独立渠道实例）。
+合计 31 个渠道（OpenRouter 同时属于"一键"与预设；WorkBuddy / CodeBuddy 是两个独立渠道实例）。
 
 ---
 
-## 二、十一个一键渠道的实现方式
+## 二、十二个一键渠道的实现方式
 
 每个渠道用的是**它自己官方开放的授权协议**，没有任何一个靠自动化网页表单。
 
@@ -226,7 +226,7 @@ Kilo 免费池的上游声明提示可能被记录用于改进服务，控制台
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/admin/connect/presets` | 30 个渠道及其连接策略 |
+| GET | `/admin/connect/presets` | 31 个渠道及其连接策略 |
 | GET | `/admin/connect/local?preset=ollama` | 探测本机运行时 |
 | GET | `/admin/connect/clipboard` | 读取剪贴板中的 Key 候选（只返回形状检查通过的） |
 | POST | `/admin/connect/verify` | 用真实对话校验 Key（不落盘） |

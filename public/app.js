@@ -36,7 +36,12 @@ const state = {
   smsState: '',
   logsSignature: '',
   statusErrorShown: false,
-  refreshing: false
+  refreshing: false,
+  loginChannelId: '',
+  poolFilter: 'all',
+  editSubmit: null,
+  openChannels: new Set(),
+  channelPoolSignature: ''
 };
 
 /* ========================================================================== */
@@ -239,15 +244,87 @@ function contextWindowForModel(model) {
   return channel?.models?.contextWindow || state.status?.models?.contextWindow || {};
 }
 
-/** The channel whose browser login / account pool the console manages. */
-function loginChannelStatus() {
-  return (
-    activeChannels().find((c) => c.enabled !== false && c.capabilities?.login) || null
-  );
+/** All channels that can own browser-login accounts (WorkBuddy / CodeBuddy). */
+function loginChannels() {
+  return activeChannels().filter((channel) => channel.enabled !== false && channel.capabilities?.login);
 }
 
-function oauthChannelCount() {
-  return activeChannels().filter((c) => c.capabilities?.oauth).length;
+/** The channel currently selected in the add-account card. */
+function loginChannelStatus() {
+  const channels = loginChannels();
+  return channels.find((channel) => channel.id === state.loginChannelId) || channels[0] || null;
+}
+
+function channelById(id) {
+  return activeChannels().find((channel) => channel.id === id) || null;
+}
+
+function accountsOf(channel) {
+  return Array.isArray(channel?.accounts) ? channel.accounts : [];
+}
+
+function accountName(account) {
+  return account.username || account.email || account.label || account.maskedApiKey || account.id || '账号';
+}
+
+function accountKind(account) {
+  if (account.channelType === 'openai-compatible') return 'key';
+  if (account.channelType === 'workbuddy' || account.channelType === 'codebuddy') return 'oauth';
+  return 'oauth';
+}
+
+/**
+ * Flatten every channel's live accounts into one scheduler pool.
+ *
+ * A channel can expose accounts that are not the "default" channel (OAuth
+ * providers, CodeBuddy, additional WorkBuddy logins). The old accounts view
+ * only rendered `status.accounts` (the default channel), which is why newly
+ * authorized channels looked like they were never added to the pool.
+ */
+function poolEntries() {
+  const rows = [];
+  for (const channel of activeChannels()) {
+    for (const account of accountsOf(channel)) {
+      rows.push({
+        ...account,
+        channel: channel.id,
+        channelLabel: channel.label || channel.id,
+        channelType: channel.type,
+        channelEnabled: channel.enabled !== false,
+        channelConfigured: Boolean(channel.configured),
+        channelOptions: channel.options || {},
+        capabilities: channel.capabilities || {}
+      });
+    }
+  }
+  return rows;
+}
+
+function poolStats() {
+  const rows = poolEntries();
+  const usable = rows.filter(
+    (account) => account.enabled !== false && account.channelEnabled !== false
+  );
+  return {
+    accounts: rows.length,
+    active: usable.length,
+    channels: new Set(rows.map((account) => account.channel)).size,
+    maxConcurrency: usable.reduce(
+      (sum, account) => sum + (Number(account.maxConcurrency) || 1),
+      0
+    ),
+    sessions: rows.reduce((sum, account) => sum + (Number(account.sessions) || 0), 0),
+    cooling: rows.filter((account) => account.coolingDown).length
+  };
+}
+
+function poolPassesFilter(account) {
+  if (state.poolFilter === 'active') {
+    return account.enabled !== false && account.channelEnabled !== false;
+  }
+  if (state.poolFilter === 'oauth') return accountKind(account) === 'oauth';
+  if (state.poolFilter === 'key') return accountKind(account) === 'key';
+  return true;
 }
 
 /* ========================================================================== */
@@ -294,16 +371,41 @@ function renderStatus() {
   const loginChannel = loginChannelStatus();
   const loginUser = loginChannel?.user || null;
   const canLogin = Boolean(loginChannel);
+  const pool = poolStats();
+  const modelCount =
+    state.models.length ||
+    channels.reduce((sum, channel) => sum + (Number(channel.modelCount) || 0), 0);
+  const poolSignature = channels
+    .map(
+      (channel) =>
+        `${channel.id}:${channel.accountCount || 0}:${channel.configured ? 1 : 0}:${
+          channel.enabled === false ? 0 : 1
+        }`
+    )
+    .join('|');
+  if (
+    state.channelPoolSignature &&
+    state.channelPoolSignature !== poolSignature &&
+    state.connect.length
+  ) {
+    renderConnectPresets();
+  }
+  state.channelPoolSignature = poolSignature;
+
+  if (loginChannel && state.loginChannelId !== loginChannel.id) {
+    state.loginChannelId = loginChannel.id;
+  }
 
   // -- sidebar
   const pill = $('statusPill');
   pill.dataset.state = running ? 'running' : configured ? 'configured' : 'idle';
   $('statusText').textContent = running ? '运行中' : configured ? '已连接 · 未启动' : '未配置';
   $('navChannelCount').textContent = String(channels.length);
+  if ($('navPoolCount')) $('navPoolCount').textContent = String(pool.accounts);
   $('sidebarMeta').textContent = running
     ? `${s.defaultModel || '默认模型'} · 监听中`
     : configured
-      ? `${channels.length} 个渠道 · 待启动`
+      ? `${pool.accounts} 个账号 · ${pool.active} 个可用`
       : '本机运行 · 凭据仅存本地';
 
   $('overviewSubtitle').textContent = running
@@ -311,6 +413,24 @@ function renderStatus() {
     : configured
       ? '渠道已就绪，可以启动网关'
       : '连接渠道，启动本地网关';
+
+  // -- request pipeline summary
+  if ($('flowChannels')) {
+    $('flowChannels').textContent = channels.length
+      ? `${channels.length} 个渠道 · ${channels.filter((channel) => channel.configured).length} 个就绪`
+      : '尚未连接';
+  }
+  if ($('flowAccounts')) {
+    $('flowAccounts').textContent = pool.accounts
+      ? `${pool.accounts} 个账号 · ${pool.maxConcurrency} 并发`
+      : '等待账号入池';
+  }
+  if ($('flowModels')) {
+    $('flowModels').textContent = modelCount ? `${modelCount} 个模型` : '等待模型';
+  }
+  if ($('flowGateway')) {
+    $('flowGateway').textContent = running ? '运行中' : configured ? '待启动' : '未配置';
+  }
 
   // -- start card
   const startState = $('startState');
@@ -332,19 +452,23 @@ function renderStatus() {
     const loginBtn = $('loginBtn');
     loginBtn.disabled = false;
     loginBtn.querySelector('.btn-label').textContent = loginUser
-      ? '重新登录 / 切换账号'
-      : '使用 WorkBuddy 账号登录';
-    $('loginHint').textContent = loginUser
-      ? `当前账号 ${loginUser.username || loginUser.email || ''} · 点击可重新授权`
-      : '在浏览器完成授权后自动写入 token，无需复制';
+      ? '重新授权主账号'
+      : `使用 ${loginChannel?.label || '账号'} 登录`;
+    $('loginHint').textContent = !loginChannel
+      ? '先连接一个支持账号登录的渠道'
+      : loginUser
+        ? `${loginChannel.label} · ${loginUser.username || loginUser.email || ''} · 点击可重新授权`
+        : `${loginChannel.label} · 浏览器授权完成后自动加入代理池`;
   }
   renderLoginAccount(loginUser);
-  renderAccounts(loginChannel?.accounts || []);
-  if ($('addAccountBtn')) $('addAccountBtn').disabled = state.loginBusy || !canLogin;
+  renderLoginChannelPicker();
+  renderPool();
+  renderOverviewPool();
+  if ($('addAccountBtn')) $('addAccountBtn').disabled = state.loginBusy;
   if ($('accountFoot')) {
-    $('accountFoot').textContent = canLogin
-      ? `${loginChannel.label} · 当前保持 ${loginChannel.routing?.sessions ?? 0} 个会话`
-      : `${defaultChannel?.label || '当前渠道'} 不支持账号管理`;
+    $('accountFoot').textContent = pool.accounts
+      ? `${pool.channels} 个渠道 · ${pool.accounts} 个账号 · 当前保持 ${pool.sessions} 个会话`
+      : '连接渠道后，账号会自动加入这里';
   }
 
   // -- account summary
@@ -707,6 +831,7 @@ async function loadModels(force = false) {
 
 function channelTypeLabel(channel) {
   if (channel.type === 'workbuddy') return 'WorkBuddy';
+  if (channel.type === 'codebuddy') return 'CodeBuddy';
   if (channel.type === 'account') return '账号渠道';
   if (channel.type === 'openai-compatible') return channel.options?.preset ? '预设' : 'OpenAI 兼容';
   return channel.type;
@@ -744,14 +869,28 @@ function renderChannels(channels) {
     (c) => channelPassesFilter(c, state.channelFilter) && channelMatches(c, query)
   );
 
+  const totalAccounts = channels.reduce((sum, channel) => sum + accountsOf(channel).length, 0);
+  const totalModels = channels.reduce((sum, channel) => sum + (Number(channel.modelCount) || 0), 0);
+  if ($('channelTotal')) $('channelTotal').textContent = String(channels.length);
+  if ($('channelReady')) {
+    $('channelReady').textContent = String(
+      channels.filter((channel) => channel.configured && channel.enabled !== false).length
+    );
+  }
+  if ($('channelAccounts')) $('channelAccounts').textContent = String(totalAccounts);
+  if ($('channelModels')) $('channelModels').textContent = String(totalModels);
+
   clear(list);
 
   if (!channels.length) {
     const empty = el('div', 'card empty-state');
-    empty.textContent = '还没有渠道。到「连接」页添加第一个渠道。';
-    const wrap = el('div');
-    wrap.appendChild(empty);
-    list.appendChild(wrap);
+    empty.appendChild(el('strong', '', '还没有渠道'));
+    empty.appendChild(el('span', '', '连接 WorkBuddy，或添加一个 OpenAI 兼容上游。'));
+    const button = el('button', 'btn secondary mini', '去连接');
+    button.type = 'button';
+    button.addEventListener('click', () => setView('connect'));
+    empty.appendChild(button);
+    list.appendChild(empty);
     return;
   }
 
@@ -761,7 +900,15 @@ function renderChannels(channels) {
   }
 
   for (const channel of visible) {
-    const card = el('div', `channel-card${channel.enabled === false ? ' is-disabled' : ''}`);
+    const accounts = accountsOf(channel);
+    const pooled = channel.configured && accounts.length > 0;
+    const isOpen = state.openChannels.has(channel.id);
+    const card = el(
+      'div',
+      `channel-card${channel.enabled === false ? ' is-disabled' : ''}${pooled ? ' is-pooled' : ''}${
+        isOpen ? ' is-open' : ''
+      }`
+    );
 
     const dot = el('span', 'channel-dot');
     if (channel.enabled !== false && channel.configured) dot.classList.add('is-on');
@@ -774,10 +921,15 @@ function renderChannels(channels) {
     if (channel.id === defaultId) title.appendChild(el('span', 'channel-badge is-default', '默认'));
     if (channel.capabilities?.oauth) title.appendChild(el('span', 'channel-badge is-oauth', 'OAuth'));
     title.appendChild(el('span', 'channel-badge', channelTypeLabel(channel)));
+    if (pooled) {
+      title.appendChild(el('span', 'channel-badge is-pooled', '已入池'));
+    } else if (channel.enabled !== false) {
+      title.appendChild(el('span', 'channel-badge is-pending', '未入池'));
+    }
     main.appendChild(title);
 
     const parts = [];
-    if (channel.accountCount != null) parts.push(`${channel.accountCount} 个账号`);
+    if (accounts.length) parts.push(`${accounts.length} 个账号`);
     if (channel.modelCount) parts.push(`${channel.modelCount} 个模型`);
     parts.push(channel.configured ? '已配置' : '待配置');
 
@@ -789,15 +941,54 @@ function renderChannels(channels) {
     }
     if (channel.routing?.sessions) parts.push(`${channel.routing.sessions} 个会话`);
     main.appendChild(el('div', 'channel-meta', parts.join(' · ')));
+    if (channel.options?.baseUrl) {
+      main.appendChild(el('div', 'channel-url', channel.options.baseUrl));
+    }
 
     const preset = (state.status?.connect || []).find((entry) => entry.id === channel.options?.preset);
     if (preset?.note) main.appendChild(el('div', 'channel-hint', preset.note));
 
+    if (accounts.length) {
+      const chips = el('div', 'channel-accounts');
+      for (const account of accounts.slice(0, 3)) {
+        const chip = el('span', 'mini-account');
+        chip.appendChild(
+          el('span', 'avatar xs', String(accountName(account)).slice(0, 1).toUpperCase())
+        );
+        chip.appendChild(el('span', '', accountName(account)));
+        chips.appendChild(chip);
+      }
+      if (accounts.length > 3) {
+        chips.appendChild(el('span', 'mini-account more', `+${accounts.length - 3}`));
+      }
+      main.appendChild(chips);
+    }
+
     const actions = el('div', 'channel-actions');
 
-    const detail = el('button', 'ghost mini', '详情');
+    if (channel.type === 'account' && channel.capabilities?.oauth) {
+      const auth = el('button', 'ghost mini', channel.configured ? '重新授权' : '去授权');
+      auth.type = 'button';
+      auth.addEventListener('click', () => openConnectFor(channel));
+      actions.appendChild(auth);
+    } else if (channel.capabilities?.login) {
+      const add = el('button', 'ghost mini', '添加账号');
+      add.type = 'button';
+      add.disabled = state.loginBusy;
+      add.addEventListener('click', () =>
+        startLogin({ channel: channel.id, createNew: true, accountId: 'primary' })
+      );
+      actions.appendChild(add);
+    } else if (channel.type === 'openai-compatible') {
+      const key = el('button', 'ghost mini', '更新 Key');
+      key.type = 'button';
+      key.addEventListener('click', () => editChannelKey(channel));
+      actions.appendChild(key);
+    }
+
+    const detail = el('button', 'ghost mini', isOpen ? '收起' : '详情');
     detail.type = 'button';
-    detail.setAttribute('aria-expanded', 'false');
+    detail.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
     actions.appendChild(detail);
 
     const test = el('button', 'ghost mini', '测试');
@@ -821,12 +1012,14 @@ function renderChannels(channels) {
 
     // -- expandable detail
     const panel = el('div', 'channel-detail');
-    panel.hidden = true;
+    panel.hidden = !isOpen;
     panel.appendChild(buildChannelDetail(channel));
     card.appendChild(panel);
 
     detail.addEventListener('click', () => {
-      const open = panel.hidden;
+      const open = !state.openChannels.has(channel.id);
+      if (open) state.openChannels.add(channel.id);
+      else state.openChannels.delete(channel.id);
       panel.hidden = !open;
       detail.setAttribute('aria-expanded', open ? 'true' : 'false');
       detail.textContent = open ? '收起' : '详情';
@@ -863,6 +1056,22 @@ function buildChannelDetail(channel) {
     list.appendChild(row);
   }
   wrap.appendChild(list);
+
+  const toolbar = el('div', 'detail-actions');
+  const poolButton = el('button', 'ghost mini', '在代理池中管理');
+  poolButton.type = 'button';
+  poolButton.addEventListener('click', () => {
+    setView('accounts');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  toolbar.appendChild(poolButton);
+  if (channel.type === 'openai-compatible') {
+    const keyButton = el('button', 'ghost mini', '更新 API Key');
+    keyButton.type = 'button';
+    keyButton.addEventListener('click', () => editChannelKey(channel));
+    toolbar.appendChild(keyButton);
+  }
+  wrap.appendChild(toolbar);
 
   const accounts = Array.isArray(channel.accounts) ? channel.accounts : [];
   if (accounts.length) {
@@ -1058,12 +1267,24 @@ function renderConnectPresets() {
 
     const grid = el('div', 'connect-grid');
     for (const preset of items) {
-      const button = el('button', `connect-item${preset.id === state.connectSelected ? ' is-active' : ''}`);
+      const connected = activeChannels().find(
+        (channel) => channel.id === preset.id || channel.options?.preset === preset.id
+      );
+      const button = el(`button`, `connect-item${preset.id === state.connectSelected ? ' is-active' : ''}${connected ? ' is-connected' : ''}`);
       button.type = 'button';
       button.dataset.preset = preset.id;
       button.appendChild(el('strong', '', preset.name));
       const label = STRATEGY_LABEL[preset.strategy] || preset.strategy;
       button.appendChild(el('span', preset.strategy === 'oauth' ? 'is-oauth-label' : '', label));
+      if (connected) {
+        button.appendChild(
+          el(
+            'span',
+            'connect-item-badge',
+            connected.accountCount ? `已入池 · ${connected.accountCount}` : '已连接'
+          )
+        );
+      }
       button.addEventListener('click', () => selectConnect(preset.id));
       grid.appendChild(button);
     }
@@ -1090,6 +1311,7 @@ function selectConnect(id) {
 
   renderConnectPresets();
   setConnectResult('', null);
+  markWizardStep(1);
 
   if (!info) {
     panel.hidden = true;
@@ -1151,14 +1373,21 @@ function selectConnect(id) {
   $('openKeyPageBtn').hidden = !info.keyUrl;
 
   if (info.strategy === 'oauth') {
-    $('oauthHint').textContent = info.note || '点「一键授权」后在浏览器完成登录，凭据会自动写回。';
+    const existing = activeChannels().find((channel) => channel.id === info.id);
+    const appendAccount =
+      info.oauth === 'workbuddy' && Boolean(existing && accountsOf(existing).length);
+    $('oauthHint').textContent = appendAccount
+      ? '当前渠道已有账号：这里会追加一个新账号，不会覆盖现有账号。'
+      : info.note || '点「一键授权」后在浏览器完成登录，凭据会自动写回。';
     const isSms = info.oauth === 'loomy';
     const isQr = info.oauth === 'raccoon';
     $('oauthStartBtn').querySelector('.btn-label').textContent = isSms
       ? '发送验证码'
       : isQr
         ? '生成登录二维码'
-        : '一键授权';
+        : appendAccount
+          ? '追加账号'
+          : '一键授权';
     $('connectSms').hidden = !isSms;
   }
 
@@ -1187,6 +1416,85 @@ function setConnectResult(text, kind, { offerStart = false } = {}) {
     button.addEventListener('click', startProxy);
     node.appendChild(button);
   }
+}
+
+function markWizardStep(step) {
+  for (const node of document.querySelectorAll('#connectWizardSteps .wizard-step')) {
+    const number = Number(node.dataset.step) || 0;
+    node.classList.toggle('is-active', number === step);
+    node.classList.toggle('is-done', number < step);
+  }
+}
+
+/**
+ * Success state for the connection wizard.
+ *
+ * The important product message is not "credential saved" but "this account
+ * is now serving traffic". Show the pool counts and the next actions.
+ */
+function showConnectSuccess({ channel, channelLabel, account, message }) {
+  const node = $('connectResult');
+  if (!node) return;
+  const pool = poolStats();
+  const label = channelLabel || channelById(channel)?.label || channel || '渠道';
+  const who = account || '账号';
+
+  node.hidden = false;
+  node.className = 'connect-result is-success';
+  clear(node);
+
+  const icon = el('div', 'result-icon', '✓');
+  const body = el('div', 'result-body');
+  body.appendChild(el('strong', 'result-title', '已加入代理池'));
+  body.appendChild(
+    el(
+      'p',
+      'result-text',
+      message || `${label} 授权完成，${who} 已保存凭据并加入调度池。`
+    )
+  );
+
+  const pills = el('div', 'result-pills');
+  pills.appendChild(el('span', 'result-pill', label));
+  pills.appendChild(el('span', 'result-pill', who));
+  pills.appendChild(
+    el(
+      'span',
+      'result-pill is-accent',
+      `${pool.accounts} 个账号 · ${pool.maxConcurrency} 并发`
+    )
+  );
+  body.appendChild(pills);
+
+  const actions = el('div', 'result-actions');
+  const poolBtn = el('button', 'btn secondary mini', '查看代理池');
+  poolBtn.type = 'button';
+  poolBtn.addEventListener('click', () => {
+    setView('accounts');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  actions.appendChild(poolBtn);
+
+  const startBtn = el(
+    'button',
+    'btn primary mini connect-start',
+    state.status?.running ? '立即更新并应用' : '立即启动网关'
+  );
+  startBtn.type = 'button';
+  startBtn.addEventListener('click', startProxy);
+  actions.appendChild(startBtn);
+
+  const again = el('button', 'ghost mini', '继续连接');
+  again.type = 'button';
+  again.addEventListener('click', () => {
+    setConnectResult('', null);
+    markWizardStep(1);
+  });
+  actions.appendChild(again);
+  body.appendChild(actions);
+
+  node.append(icon, body);
+  markWizardStep(3);
 }
 
 function setOauthState(text, kind, linkUrl) {
@@ -1306,6 +1614,7 @@ async function startOauth() {
   $('connectDevice').hidden = true;
   $('connectQr').hidden = true;
   setOauthState('正在创建授权会话…', 'pending');
+  markWizardStep(2);
 
   const generation = state.oauthGeneration;
 
@@ -1376,27 +1685,34 @@ async function startWorkbuddyFamilyLogin(info) {
   $('connectDevice').hidden = true;
   $('connectQr').hidden = true;
   setOauthState('正在创建登录会话…', 'pending');
+  markWizardStep(2);
 
   try {
     // Ensure the channel exists so its login endpoint has something to target.
-    const existing = activeChannels().find((channel) => channel.id === info.id);
-    if (!existing) {
+    let channel = activeChannels().find((entry) => entry.id === info.id);
+    const append = Boolean(channel && accountsOf(channel).length);
+    if (!channel) {
       await api('/admin/channels/create', {
         method: 'POST',
         body: JSON.stringify({
           id: info.id,
-          type: 'codebuddy',
+          type: info.id === 'workbuddy' ? 'workbuddy' : 'codebuddy',
           label: info.name,
           baseUrl: info.baseUrl,
           models: (info.suggestedModels || []).join('\n')
         })
       });
       await refreshStatus({ silent: true });
+      channel = activeChannels().find((entry) => entry.id === info.id);
     }
 
     const data = await api('/admin/login/start', {
       method: 'POST',
-      body: JSON.stringify({ channel: info.id, accountId: 'primary' })
+      body: JSON.stringify({
+        channel: info.id,
+        accountId: 'primary',
+        createNew: append
+      })
     });
 
     setBusy(button, false);
@@ -1448,7 +1764,6 @@ function pollWorkbuddyFamilyLogin(info, loginState) {
         setBusy($('oauthStartBtn'), false);
         const who = data.user?.username || data.user?.email || '账号';
         setOauthState(`授权完成：${who}`, 'ok');
-        setConnectResult(`${info.name} 已连接。`, null, { offerStart: true });
         try {
           state.oauthPopup?.close();
         } catch {
@@ -1456,6 +1771,12 @@ function pollWorkbuddyFamilyLogin(info, loginState) {
         }
         await refreshStatus({ silent: true });
         await loadModels();
+        showConnectSuccess({
+          channel: info.id,
+          channelLabel: info.name,
+          account: who,
+          message: `${info.name} 授权完成，${who} 的凭据已保存并加入代理池。`
+        });
         return;
       }
 
@@ -1567,12 +1888,7 @@ function pollOauth(info, oauthState) {
       if (data.status === 'success') {
         stopOauthPolling();
         setBusy($('oauthStartBtn'), false);
-        setOauthState(data.message, 'ok');
-        setConnectResult(
-          `${data.channelLabel || data.channel} 已连接${data.account?.username ? `（${data.account.username}）` : ''}。`,
-          null,
-          { offerStart: true }
-        );
+        setOauthState(data.message || '授权完成', 'ok');
         try {
           state.oauthPopup?.close();
         } catch {
@@ -1580,6 +1896,12 @@ function pollOauth(info, oauthState) {
         }
         await refreshStatus({ silent: true });
         await loadModels();
+        showConnectSuccess({
+          channel: data.channel,
+          channelLabel: data.channelLabel,
+          account: data.account?.username || data.account?.label || '账号',
+          message: data.message
+        });
         return;
       }
 
@@ -1616,6 +1938,7 @@ async function verifyAndAddKey({ fromClipboard = false } = {}) {
   const button = $('verifyKeyBtn');
   setBusy(button, true);
   setConnectResult('正在用真实对话端点校验这个 Key…', null);
+  markWizardStep(2);
 
   try {
     const verified = await api('/admin/connect/verify', {
@@ -1624,10 +1947,15 @@ async function verifyAndAddKey({ fromClipboard = false } = {}) {
     });
 
     await createChannelFromPreset(info, apiKey, verified.models);
-    setConnectResult(verified.message, null, { offerStart: true });
     $('connectKeyInput').value = '';
     await refreshStatus({ silent: true });
     await loadModels();
+    showConnectSuccess({
+      channel: info.id,
+      channelLabel: info.name,
+      account: 'API Key',
+      message: verified.message || `${info.name} 的 Key 已保存，渠道已加入代理池。`
+    });
   } catch (err) {
     setConnectResult(
       fromClipboard ? `剪贴板里的内容没能通过校验：${err.message}` : `校验失败：${err.message}`,
@@ -1645,6 +1973,7 @@ async function addKeylessChannel() {
   const button = $('addKeylessBtn');
   setBusy(button, true);
   setConnectResult('正在添加渠道…', null);
+  markWizardStep(2);
 
   try {
     let models = info.suggestedModels || [];
@@ -1655,13 +1984,14 @@ async function addKeylessChannel() {
     }
 
     await createChannelFromPreset(info, '', models);
-    setConnectResult(
-      `${info.name} 已添加${models.length ? `，${models.length} 个模型` : ''}。`,
-      null,
-      { offerStart: true }
-    );
     await refreshStatus({ silent: true });
     await loadModels();
+    showConnectSuccess({
+      channel: info.id,
+      channelLabel: info.name,
+      account: info.local ? '本机服务' : '免密渠道',
+      message: `${info.name} 已添加${models.length ? `，${models.length} 个模型` : ''}，并加入代理池。`
+    });
   } catch (err) {
     setConnectResult(err.message, 'error');
   } finally {
@@ -1735,7 +2065,12 @@ function loadConnectPresets() {
 
   renderConnectPresets();
   if (!state.connectSelected) {
-    const preferred = list.find((entry) => entry.strategy === 'oauth') || list[0];
+    const preferred =
+      list.find((entry) => activeChannels().some((channel) => channel.id === entry.id)) ||
+      list.find((entry) => entry.id === 'codebuddy') ||
+      list.find((entry) => entry.id === 'openrouter') ||
+      list.find((entry) => entry.strategy === 'oauth') ||
+      list[0];
     selectConnect(preferred.id);
   } else {
     selectConnect(state.connectSelected);
@@ -1772,12 +2107,17 @@ function updateTokenPreview() {
 
 async function saveCredentials() {
   const source = $('tokenInput').value.trim();
+  const channel = loginChannelStatus();
+  if (!channel) {
+    toast('还没有支持账号登录的渠道', 'error');
+    return;
+  }
   if (!source) {
-    toast('请先粘贴 WorkBuddy Token', 'error');
+    toast(`请先粘贴 ${channel.label} Token`, 'error');
     return;
   }
 
-  const payload = { source, channel: loginChannelStatus()?.id };
+  const payload = { source, channel: channel.id };
   const deviceToken = $('deviceInput').value.trim();
   const userId = $('userInput').value.trim();
   if (deviceToken) payload.deviceToken = deviceToken;
@@ -1785,12 +2125,12 @@ async function saveCredentials() {
 
   const button = $('saveBtn');
   setBusy(button, true);
-  setMsg($('credMsg'), '正在向 WorkBuddy 校验 Token…', 'warn');
+  setMsg($('credMsg'), `正在向 ${channel.label} 校验 Token…`, 'warn');
 
   try {
     const data = await api('/admin/credentials', { method: 'POST', body: JSON.stringify(payload) });
-    setMsg($('credMsg'), data.warning || '凭据已验证并保存', data.warning ? 'warn' : 'ok');
-    toast(data.warning || '凭据已验证并保存', data.warning ? 'warn' : 'success');
+    setMsg($('credMsg'), data.warning || '凭据已验证并加入代理池', data.warning ? 'warn' : 'ok');
+    toast(data.warning || '凭据已验证并加入代理池', data.warning ? 'warn' : 'success');
 
     $('tokenInput').value = '';
     $('deviceInput').value = '';
@@ -1844,78 +2184,332 @@ function renderLoginAccount(user) {
   node.append(avatar, who);
 }
 
-function renderAccounts(accounts) {
-  const list = $('accountList');
-  if (!list) return;
-  clear(list);
+function renderLoginChannelPicker() {
+  const box = $('loginChannelPicker');
+  if (!box) return;
+  clear(box);
 
-  if (!accounts.length) {
-    list.appendChild(el('div', 'empty-state', '暂无账号'));
+  const channels = loginChannels();
+  if (!channels.length) {
+    box.hidden = true;
     return;
   }
-
-  for (const account of accounts) {
-    const row = el('div', `account-row${account.enabled === false ? ' is-disabled' : ''}${account.coolingDown ? ' is-cooling' : ''}`);
-
-    const avatar = el(
-      'div',
-      'avatar',
-      String(account.username || account.email || account.label || '?').slice(0, 1).toUpperCase()
+  box.hidden = false;
+  box.appendChild(el('span', 'picker-label', '登录渠道'));
+  for (const channel of channels) {
+    const chip = el(
+      'button',
+      `login-channel-chip${channel.id === loginChannelStatus()?.id ? ' is-active' : ''}`,
+      channel.label || channel.id
     );
-
-    const who = el('div', 'who');
-    who.appendChild(el('span', 'name', account.username || account.label || account.id));
-
-    const metaParts = [];
-    if (account.channelLabel) metaParts.push(account.channelLabel);
-    if (account.email && account.email !== account.username) metaParts.push(account.email);
-    metaParts.push(`并发 ${account.load ?? 0}/${account.maxConcurrency ?? 1}`);
-    if (account.sessions) metaParts.push(`会话 ${account.sessions}`);
-    if (account.expiresAt) metaParts.push(`到期 ${new Date(account.expiresAt).toLocaleDateString('zh-CN')}`);
-    who.appendChild(el('span', 'meta', metaParts.join(' · ')));
-
-    const badges = el('div', 'account-badges');
-    if (account.isPrimary) badges.appendChild(el('span', 'account-badge primary', '主账号'));
-    if (account.coolingDown) badges.appendChild(el('span', 'account-badge cooling', '冷却中'));
-    if (account.enabled === false) badges.appendChild(el('span', 'account-badge off', '已停用'));
-    if (badges.childElementCount) who.appendChild(badges);
-
-    const actions = el('div', 'account-actions');
-
-    if (!account.channel || account.channel === 'workbuddy') {
-      const login = el('button', 'ghost mini', '登录');
-      login.type = 'button';
-      login.title = '重新走一次 WorkBuddy 授权';
-      login.disabled = state.loginBusy;
-      login.addEventListener('click', () => startLogin({ accountId: account.id }));
-      actions.appendChild(login);
-    }
-
-    const toggle = el('button', 'ghost mini', account.enabled === false ? '启用' : '停用');
-    toggle.type = 'button';
-    toggle.disabled = state.loginBusy;
-    toggle.addEventListener('click', () => toggleAccount(account.id, account.enabled === false));
-    actions.appendChild(toggle);
-
-    if (!account.isPrimary) {
-      const remove = el('button', 'ghost mini danger', '删除');
-      remove.type = 'button';
-      remove.disabled = state.loginBusy;
-      remove.addEventListener('click', () => removeAccount(account.id));
-      actions.appendChild(remove);
-    }
-
-    row.append(avatar, who, actions);
-    list.appendChild(row);
+    chip.type = 'button';
+    chip.addEventListener('click', () => {
+      state.loginChannelId = channel.id;
+      renderStatus();
+    });
+    box.appendChild(chip);
   }
 }
 
-async function toggleAccount(id, enabled) {
+function poolGroupHeader(channel, accounts) {
+  const head = el('header', 'pool-group-head');
+  const title = el('div', 'pool-group-title');
+
+  const dot = el('span', 'channel-dot');
+  if (channel.enabled === false) dot.classList.add('is-off');
+  else if (channel.configured) dot.classList.add('is-on');
+  else dot.classList.add('is-warn');
+  title.appendChild(dot);
+  title.appendChild(el('strong', '', channel.label || channel.id));
+
+  if (channel.id === defaultChannelStatus()?.id) {
+    title.appendChild(el('span', 'channel-badge is-default', '默认'));
+  }
+  title.appendChild(el('span', 'channel-badge', channelTypeLabel(channel)));
+
+  const max = accounts.reduce(
+    (sum, account) => sum + (account.enabled === false ? 0 : Number(account.maxConcurrency) || 1),
+    0
+  );
+  const sessions = accounts.reduce((sum, account) => sum + (Number(account.sessions) || 0), 0);
+  title.appendChild(
+    el('span', 'pool-group-meta', `${accounts.length} 账号 · ${max} 并发 · ${sessions} 会话`)
+  );
+  head.appendChild(title);
+
+  const actions = el('div', 'pool-group-actions');
+  if (channel.capabilities?.login) {
+    const add = el('button', 'ghost mini', '添加账号');
+    add.type = 'button';
+    add.disabled = state.loginBusy;
+    add.addEventListener('click', () =>
+      startLogin({ channel: channel.id, createNew: true, accountId: 'primary' })
+    );
+    actions.appendChild(add);
+  }
+  if (channel.type === 'account' && channel.capabilities?.oauth) {
+    const reauth = el('button', 'ghost mini', '重新授权');
+    reauth.type = 'button';
+    reauth.addEventListener('click', () => openConnectFor(channel));
+    actions.appendChild(reauth);
+  }
+  if (channel.type === 'openai-compatible') {
+    const key = el('button', 'ghost mini', '更新 Key');
+    key.type = 'button';
+    key.addEventListener('click', () => editChannelKey(channel));
+    actions.appendChild(key);
+  }
+  const manage = el('button', 'ghost mini', '渠道详情');
+  manage.type = 'button';
+  manage.addEventListener('click', () => setView('channels'));
+  actions.appendChild(manage);
+  head.appendChild(actions);
+  return head;
+}
+
+function poolAccountRow(account) {
+  const channel = channelById(account.channel);
+  const row = el(
+    'div',
+    `account-row${account.enabled === false ? ' is-disabled' : ''}${account.coolingDown ? ' is-cooling' : ''}${accountKind(account) === 'key' ? ' is-key' : ''}`
+  );
+
+  const initial = String(accountName(account) || '?').slice(0, 1).toUpperCase();
+  row.appendChild(el('div', 'avatar', initial));
+
+  const who = el('div', 'who');
+  const nameLine = el('div', 'name-line');
+  nameLine.appendChild(el('span', 'name', accountName(account)));
+  if (account.isPrimary) {
+    nameLine.appendChild(
+      el('span', 'account-badge primary', accountKind(account) === 'key' ? '主凭据' : '主账号')
+    );
+  }
+  if (accountKind(account) === 'key') nameLine.appendChild(el('span', 'account-badge key', 'API Key'));
+  if (account.coolingDown) nameLine.appendChild(el('span', 'account-badge cooling', '冷却中'));
+  if (account.enabled === false) nameLine.appendChild(el('span', 'account-badge off', '已停用'));
+  who.appendChild(nameLine);
+
+  const meta = [];
+  if (account.channelLabel) meta.push(account.channelLabel);
+  if (account.email && account.email !== accountName(account)) meta.push(account.email);
+  if (account.channelType === 'openai-compatible' && account.maskedApiKey) {
+    meta.push(account.maskedApiKey);
+  }
+  meta.push(`ID ${account.id}`);
+  who.appendChild(el('span', 'meta', meta.join(' · ')));
+  row.appendChild(who);
+
+  const usage = el('div', 'account-usage');
+  const load = Number(account.load) || 0;
+  const max = Number(account.maxConcurrency) || 1;
+  const pct = Math.max(0, Math.min(100, Math.round((load / Math.max(1, max)) * 100)));
+  usage.appendChild(el('span', 'usage-label', '并发'));
+  usage.appendChild(el('strong', 'usage-value', `${load}/${max}`));
+  const meter = el('span', 'load-meter');
+  const bar = el('i');
+  bar.style.width = `${pct}%`;
+  if (pct >= 100) bar.classList.add('is-full');
+  meter.appendChild(bar);
+  usage.appendChild(meter);
+  if (account.sessions) usage.appendChild(el('span', 'usage-sessions', `${account.sessions} 会话`));
+  row.appendChild(usage);
+
+  const expiry =
+    accountKind(account) === 'key'
+      ? {
+          text: account.maskedApiKey ? 'Key 已保存' : '免密 / 无 Key',
+          cls: ''
+        }
+      : expiryInfo(account.expiresAt);
+  const expiryNode = el('span', `account-expiry ${expiry.cls}`.trim(), expiry.text);
+  if (account.expiresAt) {
+    expiryNode.title = `到期时间：${new Date(account.expiresAt).toLocaleString('zh-CN')}`;
+  }
+  row.appendChild(expiryNode);
+
+  const actions = el('div', 'account-actions');
+
+  if (accountKind(account) === 'key') {
+    const update = el('button', 'ghost mini', '更新 Key');
+    update.type = 'button';
+    update.addEventListener('click', () => editChannelKey(channel));
+    actions.appendChild(update);
+
+    const test = el('button', 'ghost mini', '测试');
+    test.type = 'button';
+    test.addEventListener('click', () => testChannel(account.channel));
+    actions.appendChild(test);
+  } else if (channel?.capabilities?.login) {
+    const login = el('button', 'ghost mini', '重新登录');
+    login.type = 'button';
+    login.disabled = state.loginBusy;
+    login.addEventListener('click', () =>
+      startLogin({ channel: account.channel, accountId: account.id })
+    );
+    actions.appendChild(login);
+
+    if (account.hasRefreshToken) {
+      const refresh = el('button', 'ghost mini', '刷新');
+      refresh.type = 'button';
+      refresh.addEventListener('click', () => refreshAccount(account));
+      actions.appendChild(refresh);
+    }
+  } else {
+    const reauth = el('button', 'ghost mini', '重新授权');
+    reauth.type = 'button';
+    reauth.addEventListener('click', () => openConnectFor(channel));
+    actions.appendChild(reauth);
+
+    if (account.hasRefreshToken) {
+      const refresh = el('button', 'ghost mini', '刷新');
+      refresh.type = 'button';
+      refresh.addEventListener('click', () => refreshAccount(account));
+      actions.appendChild(refresh);
+    }
+  }
+
+  const edit = el('button', 'ghost mini', '编辑');
+  edit.type = 'button';
+  edit.addEventListener('click', () => editAccount(account));
+  actions.appendChild(edit);
+
+  const toggle = el('button', 'ghost mini', account.enabled === false ? '启用' : '停用');
+  toggle.type = 'button';
+  toggle.disabled = state.loginBusy;
+  toggle.addEventListener('click', () => toggleAccount(account, account.enabled === false));
+  actions.appendChild(toggle);
+
+  if (!account.isPrimary) {
+    const remove = el('button', 'ghost mini danger', '删除');
+    remove.type = 'button';
+    remove.disabled = state.loginBusy;
+    remove.addEventListener('click', () => removeAccount(account));
+    actions.appendChild(remove);
+  }
+
+  row.appendChild(actions);
+  return row;
+}
+
+function renderPool() {
+  const list = $('accountList');
+  if (!list) return;
+
+  const all = poolEntries();
+  const stats = poolStats();
+  if ($('poolAccountCount')) $('poolAccountCount').textContent = String(stats.accounts);
+  if ($('poolAccountMeta')) {
+    $('poolAccountMeta').textContent = stats.accounts
+      ? `${stats.active} 个启用${stats.cooling ? ` · ${stats.cooling} 个冷却` : ''}`
+      : '暂无账号';
+  }
+  if ($('poolConcurrency')) $('poolConcurrency').textContent = String(stats.maxConcurrency);
+  if ($('poolChannelCount')) $('poolChannelCount').textContent = String(stats.channels);
+  if ($('poolSessions')) $('poolSessions').textContent = String(stats.sessions);
+
+  const rows = all.filter(poolPassesFilter);
+  clear(list);
+
+  if (!rows.length) {
+    const empty = el('div', 'empty-state pool-empty');
+    empty.appendChild(
+      el('strong', '', all.length ? '当前筛选没有账号' : '代理池还是空的')
+    );
+    empty.appendChild(
+      el('span', '', all.length ? '切换筛选条件，或连接更多渠道。' : '连接一个渠道后，账号会自动出现在这里。')
+    );
+    const connect = el('button', 'btn secondary mini', '去连接渠道');
+    connect.type = 'button';
+    connect.addEventListener('click', () => setView('connect'));
+    empty.appendChild(connect);
+    list.appendChild(empty);
+    return;
+  }
+
+  const groups = new Map();
+  for (const account of rows) {
+    const channel = channelById(account.channel) || {
+      id: account.channel,
+      label: account.channelLabel,
+      type: account.channelType,
+      enabled: account.channelEnabled,
+      configured: account.channelConfigured,
+      capabilities: account.capabilities,
+      options: account.channelOptions
+    };
+    if (!groups.has(account.channel)) groups.set(account.channel, { channel, accounts: [] });
+    groups.get(account.channel).accounts.push(account);
+  }
+
+  for (const { channel, accounts } of groups.values()) {
+    const group = el('section', 'pool-group');
+    group.appendChild(poolGroupHeader(channel, accounts));
+    const body = el('div', 'pool-group-body');
+    for (const account of accounts) body.appendChild(poolAccountRow(account));
+    group.appendChild(body);
+    list.appendChild(group);
+  }
+}
+
+function renderOverviewPool() {
+  const box = $('overviewPool');
+  if (!box) return;
+  clear(box);
+
+  const rows = poolEntries();
+  const stats = poolStats();
+  if ($('poolMiniStats')) {
+    $('poolMiniStats').textContent = rows.length
+      ? `${stats.accounts} 个账号 · ${stats.maxConcurrency} 并发`
+      : '0 个账号 · 0 并发';
+  }
+  if ($('poolMiniMeta')) {
+    $('poolMiniMeta').textContent = rows.length
+      ? `${stats.channels} 个渠道 · ${stats.sessions} 个会话粘滞`
+      : '账号会自动加入调度池';
+  }
+
+  if (!rows.length) {
+    const empty = el('div', 'empty-state');
+    empty.appendChild(el('strong', '', '还没有账号'));
+    empty.appendChild(el('span', '', '连接 WorkBuddy 或添加一个 API Key 渠道。'));
+    box.appendChild(empty);
+    return;
+  }
+
+  for (const account of rows.slice(0, 4)) {
+    const row = el('div', 'pool-mini-row');
+    row.appendChild(
+      el('span', 'avatar sm', String(accountName(account)).slice(0, 1).toUpperCase())
+    );
+    const who = el('div', 'pool-mini-who');
+    who.appendChild(el('strong', '', accountName(account)));
+    who.appendChild(
+      el(
+        'span',
+        '',
+        `${account.channelLabel} · ${account.load ?? 0}/${account.maxConcurrency ?? 1} 并发${
+          account.sessions ? ` · ${account.sessions} 会话` : ''
+        }`
+      )
+    );
+    row.appendChild(who);
+    const dot = el('span', 'mini-status-dot');
+    if (account.enabled === false || account.channelEnabled === false) dot.classList.add('is-off');
+    else if (account.coolingDown) dot.classList.add('is-warn');
+    else dot.classList.add('is-on');
+    row.appendChild(dot);
+    box.appendChild(row);
+  }
+}
+
+async function toggleAccount(account, enabled) {
   if (state.loginBusy) return;
   try {
     await api('/admin/accounts/toggle', {
       method: 'POST',
-      body: JSON.stringify({ id, enabled, channel: loginChannelStatus()?.id })
+      body: JSON.stringify({ id: account.id, enabled, channel: account.channel })
     });
     toast(enabled ? '账号已启用' : '账号已停用', 'success');
     await refreshStatus({ silent: true });
@@ -1924,19 +2518,215 @@ async function toggleAccount(id, enabled) {
   }
 }
 
-async function removeAccount(id) {
+async function removeAccount(account) {
   if (state.loginBusy) return;
-  if (!window.confirm('确定删除这个账号？')) return;
+  if (!window.confirm(`确定从 ${account.channelLabel} 删除账号 ${accountName(account)}？`)) return;
   try {
     await api('/admin/accounts/remove', {
       method: 'POST',
-      body: JSON.stringify({ id, channel: loginChannelStatus()?.id })
+      body: JSON.stringify({ id: account.id, channel: account.channel })
     });
     toast('账号已删除', 'success');
     await refreshStatus({ silent: true });
   } catch (err) {
     toast(err.message, 'error');
   }
+}
+
+async function refreshAccount(account) {
+  const channel = channelById(account.channel);
+  if (!channel) return;
+  try {
+    if (channel.type === 'workbuddy' || channel.type === 'codebuddy') {
+      await api('/admin/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ channel: channel.id, accountId: account.id })
+      });
+    } else if (channel.type === 'account' && channel.options?.oauth) {
+      await api('/admin/connect/oauth/refresh', {
+        method: 'POST',
+        body: JSON.stringify({
+          provider: channel.options.oauth,
+          channelId: channel.id,
+          accountId: account.id
+        })
+      });
+    } else {
+      toast('该渠道没有可刷新的令牌', 'warn');
+      return;
+    }
+    toast('令牌已刷新', 'success');
+    await refreshStatus({ silent: true });
+  } catch (err) {
+    toast(`刷新失败：${err.message}`, 'error');
+  }
+}
+
+function openEditor({ title, hint, fields, submitLabel = '保存', onSubmit }) {
+  const dialog = $('editDialog');
+  if (!dialog) return;
+
+  $('editTitle').textContent = title;
+  $('editHint').textContent = hint || '';
+  const box = $('editFields');
+  clear(box);
+  const inputs = {};
+
+  for (const field of fields || []) {
+    const label = el('label', 'modal-field');
+    label.appendChild(el('span', 'modal-label', field.label));
+    let input;
+    if (field.type === 'select') {
+      input = document.createElement('select');
+      for (const option of field.options || []) {
+        const node = document.createElement('option');
+        node.value = option.value;
+        node.textContent = option.label;
+        input.appendChild(node);
+      }
+    } else {
+      input = document.createElement('input');
+      input.type = field.type || 'text';
+      if (field.min !== undefined) input.min = String(field.min);
+      if (field.max !== undefined) input.max = String(field.max);
+      if (field.step !== undefined) input.step = String(field.step);
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      if (field.placeholder) input.placeholder = field.placeholder;
+    }
+    input.value = field.value ?? '';
+    label.appendChild(input);
+    box.appendChild(label);
+    inputs[field.name] = input;
+  }
+
+  $('editSubmit').textContent = submitLabel;
+  state.editSubmit = async () => {
+    const values = {};
+    for (const [name, input] of Object.entries(inputs)) values[name] = input.value.trim();
+    await onSubmit(values);
+  };
+
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+  setTimeout(() => {
+    const first = box.querySelector('input, select');
+    first?.focus();
+  }, 30);
+}
+
+function closeEditor() {
+  const dialog = $('editDialog');
+  state.editSubmit = null;
+  if (!dialog) return;
+  if (typeof dialog.close === 'function') dialog.close();
+  else dialog.removeAttribute('open');
+}
+
+async function editAccount(account) {
+  const channel = channelById(account.channel);
+  openEditor({
+    title: '编辑账号',
+    hint: `${channel?.label || account.channelLabel} · ${accountName(account)}`,
+    fields: [
+      { name: 'label', label: '显示名称', value: account.label || '', placeholder: '便于识别的名称' },
+      {
+        name: 'maxConcurrency',
+        label: '最大并发',
+        type: 'number',
+        min: 1,
+        max: 20,
+        value: account.maxConcurrency ?? 1
+      }
+    ],
+    submitLabel: '保存账号设置',
+    onSubmit: async (values) => {
+      await api('/admin/accounts/update', {
+        method: 'POST',
+        body: JSON.stringify({
+          channel: account.channel,
+          id: account.id,
+          label: values.label,
+          maxConcurrency: Number(values.maxConcurrency)
+        })
+      });
+      toast('账号设置已保存', 'success');
+      await refreshStatus({ silent: true });
+    }
+  });
+}
+
+function editChannelKey(channel) {
+  if (!channel) return;
+  const hasKey = Boolean(channel.options?.hasKey);
+  openEditor({
+    title: hasKey ? '更新 API Key' : '填写 API Key',
+    hint: `${channel.label} · ${channel.options?.baseUrl || 'OpenAI 兼容渠道'}`,
+    fields: [
+      {
+        name: 'apiKey',
+        label: 'API Key',
+        type: 'password',
+        value: '',
+        placeholder: hasKey ? '已保存，输入新 Key 覆盖' : '粘贴服务商 Key'
+      }
+    ],
+    submitLabel: '保存并测试',
+    onSubmit: async (values) => {
+      if (!values.apiKey) throw new Error('请输入新的 API Key');
+      await api('/admin/channels/update', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: channel.id,
+          options: { apiKey: values.apiKey }
+        })
+      });
+      toast('API Key 已更新', 'success');
+      await refreshStatus({ silent: true });
+      await loadModels();
+      try {
+        const data = await api('/admin/channels/test', {
+          method: 'POST',
+          body: JSON.stringify({ id: channel.id })
+        });
+        toast(data.message || '渠道可用', 'success');
+      } catch (err) {
+        toast(`Key 已保存，但渠道测试失败：${err.message}`, 'warn');
+      }
+    }
+  });
+}
+
+function openConnectFor(channel) {
+  if (!channel) return;
+  const candidates = [channel.options?.oauth, channel.options?.preset, channel.id].filter(Boolean);
+  let preset = candidates.map((id) => connectInfoFor(id)).find(Boolean);
+  if (!preset) {
+    preset = state.connect.find((entry) => entry.name === channel.label);
+  }
+  setView('connect');
+  if (preset) selectConnect(preset.id);
+  setTimeout(() => {
+    $('connectPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 80);
+}
+
+function addAccountFlow() {
+  const channels = loginChannels();
+  if (!channels.length) {
+    toast('先连接一个支持账号登录的渠道（WorkBuddy / CodeBuddy）', 'warn');
+    setView('connect');
+    return;
+  }
+  const channel = loginChannelStatus();
+  state.loginChannelId = channel.id;
+  $('cardCredentials')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (state.loginBusy) return;
+  if (channels.length > 1) {
+    setLoginFeedback('有多个可登录渠道：先在下方选择渠道，再点登录或「添加账号」。', 'pending');
+    return;
+  }
+  startLogin({ channel: channel.id, createNew: true, accountId: 'primary' });
 }
 
 function finishLoginError(message) {
@@ -1948,16 +2738,17 @@ function finishLoginError(message) {
   const button = $('loginBtn');
   setBusy(button, false);
   button.disabled = false;
-  button.querySelector('.btn-label').textContent = loginChannelStatus()?.user
-    ? '重新登录 / 切换账号'
-    : '使用 WorkBuddy 账号登录';
+  const channel = loginChannelStatus();
+  button.querySelector('.btn-label').textContent = channel?.user
+    ? '重新授权主账号'
+    : `使用 ${channel?.label || '账号'} 登录`;
   $('addAccountBtn').disabled = false;
-  renderAccounts(loginChannelStatus()?.accounts || []);
+  renderPool();
   setLoginFeedback(message, 'error');
   toast(message, 'error');
 }
 
-function pollLogin(loginState, popup, target = {}) {
+function pollLogin(loginState, popup, target = {}, channel = loginChannelStatus()) {
   if (state.loginTimer) clearInterval(state.loginTimer);
   let attempts = 0;
   let stopped = false;
@@ -1980,21 +2771,25 @@ function pollLogin(loginState, popup, target = {}) {
     }
 
     try {
-      const data = await api(`/admin/login/status?state=${encodeURIComponent(loginState)}`);
+      const channelQuery = channel?.id ? `&channel=${encodeURIComponent(channel.id)}` : '';
+      const data = await api(
+        `/admin/login/status?state=${encodeURIComponent(loginState)}${channelQuery}`
+      );
       if (data.status === 'success') {
         stop();
         state.loginBusy = false;
+        if (channel?.id) state.loginChannelId = channel.id;
         const button = $('loginBtn');
         setBusy(button, false);
         button.disabled = false;
         $('addAccountBtn').disabled = false;
         const who = data.user?.username || data.user?.email || '账号';
-        const action = target.createNew ? '账号已添加' : '登录成功';
+        const action = target.createNew ? '账号已加入代理池' : '登录成功';
         setLoginFeedback(
           data.warning ? `${action}，但${data.warning}` : `${action}：${who}，token 已自动更新`,
           data.warning ? 'pending' : 'success'
         );
-        toast(target.createNew ? '账号已添加' : '账号登录成功', data.warning ? 'warn' : 'success');
+        toast(target.createNew ? '账号已加入代理池' : '账号登录成功', data.warning ? 'warn' : 'success');
         try {
           popup?.close();
         } catch {
@@ -2019,6 +2814,14 @@ function pollLogin(loginState, popup, target = {}) {
 async function startLogin(target = {}) {
   if (state.loginBusy) return;
 
+  const channel = target.channel ? channelById(target.channel) : loginChannelStatus();
+  if (!channel) {
+    toast('还没有支持账号登录的渠道，请先连接 WorkBuddy 或 CodeBuddy', 'warn');
+    setView('connect');
+    return;
+  }
+  state.loginChannelId = channel.id;
+
   // Open the popup synchronously so the browser treats it as a user gesture.
   let popup = null;
   try {
@@ -2032,24 +2835,26 @@ async function startLogin(target = {}) {
   setBusy(button, true);
   button.querySelector('.btn-label').textContent = '正在打开授权页…';
   $('addAccountBtn').disabled = true;
-  renderAccounts(loginChannelStatus()?.accounts || []);
+  renderPool();
   setLoginFeedback(
-    target.createNew ? '正在添加账号，请完成浏览器授权…' : '正在创建登录会话…',
+    target.createNew
+      ? `正在为 ${channel.label} 添加账号，请完成浏览器授权…`
+      : `正在创建 ${channel.label} 登录会话…`,
     'pending'
   );
 
   try {
     const data = await api('/admin/login/start', {
       method: 'POST',
-      body: JSON.stringify({ ...target, channel: loginChannelStatus()?.id })
+      body: JSON.stringify({ ...target, channel: channel.id })
     });
     if (popup) {
       popup.location.href = data.authUrl;
-      setLoginFeedback('等待浏览器授权… 完成登录后会自动更新', 'pending');
+      setLoginFeedback('等待浏览器授权… 完成登录后会自动加入代理池', 'pending');
     } else {
       setLoginFeedback('浏览器拦截了新窗口，请点击「打开授权页」完成登录。', 'pending', data.authUrl);
     }
-    pollLogin(data.state, popup, target);
+    pollLogin(data.state, popup, target, channel);
   } catch (err) {
     try {
       popup?.close();
@@ -2186,9 +2991,12 @@ function renderLogs(logs, targetId, filter) {
   clear(list);
 
   if (!rows.length) {
-    list.appendChild(
-      el('div', 'empty-state', logs.length ? '没有符合条件的记录' : '暂无请求，启动网关后在这里查看调用记录')
-    );
+    const empty = logs.length
+      ? '没有符合条件的记录'
+      : state.status?.running
+        ? '网关运行中，暂无请求。调用一次 API 后会显示在这里。'
+        : '暂无请求，启动网关后在这里查看调用记录';
+    list.appendChild(el('div', 'empty-state', empty));
     return;
   }
 
@@ -2238,7 +3046,52 @@ function renderSettings() {
   if ($('infoConfig')) $('infoConfig').textContent = config.configPath || '—';
   if ($('infoHost')) $('infoHost').textContent = `${config.host || '—'}:${config.port ?? '—'}`;
   if ($('infoAuth')) $('infoAuth').textContent = config.authEnabled ? '已启用 API Key' : '未启用（仅本机）';
-  if ($('infoChannels')) $('infoChannels').textContent = String(activeChannels().length);
+  if ($('infoChannels')) {
+    const pools = poolStats();
+    $('infoChannels').textContent = `${activeChannels().length} 个渠道 / ${pools.channels} 个入池`;
+  }
+  if ($('infoAccounts')) $('infoAccounts').textContent = `${poolStats().accounts} 个`;
+  if ($('infoStatus')) $('infoStatus').textContent = s.running ? '运行中' : '已停止';
+
+  const preview = $('routingPreview');
+  if (preview) {
+    clear(preview);
+    const modeLabel = { auto: '自动', always: '总是加前缀', never: '从不加前缀' }[
+      routing.namespace || 'auto'
+    ];
+    const rows = [
+      ['默认模型', s.defaultModel || routing.defaultModel || '—'],
+      ['命名空间', modeLabel],
+      [
+        '公开模型数',
+        String(
+          state.models.length ||
+            activeChannels().reduce(
+              (sum, channel) => sum + (Number(channel.modelCount) || 0),
+              0
+            )
+        )
+      ]
+    ];
+    for (const [label, value] of rows) {
+      const row = el('div', 'routing-row');
+      row.appendChild(el('span', 'routing-key', label));
+      row.appendChild(el('strong', 'routing-value', value));
+      preview.appendChild(row);
+    }
+
+    const aliases = Object.entries(routing.aliases || {});
+    const aliasRow = el('div', 'routing-row');
+    aliasRow.appendChild(el('span', 'routing-key', '别名'));
+    if (aliases.length) {
+      const chips = el('div', 'chip-row');
+      for (const [from, to] of aliases) chips.appendChild(el('span', 'chip', `${from} → ${to}`));
+      aliasRow.appendChild(chips);
+    } else {
+      aliasRow.appendChild(el('span', 'routing-value muted', '暂无别名'));
+    }
+    preview.appendChild(aliasRow);
+  }
 }
 
 async function saveRouting() {
@@ -2540,7 +3393,41 @@ function bind() {
   });
   $('saveBtn').addEventListener('click', saveCredentials);
   $('loginBtn').addEventListener('click', () => startLogin({ accountId: 'primary' }));
-  $('addAccountBtn').addEventListener('click', () => startLogin({ createNew: true }));
+  $('addAccountBtn').addEventListener('click', addAccountFlow);
+
+  const poolFilters = $('poolFilters');
+  if (poolFilters) {
+    poolFilters.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-pool-filter]');
+      if (!button) return;
+      state.poolFilter = button.dataset.poolFilter;
+      for (const chip of poolFilters.querySelectorAll('.chip')) {
+        chip.classList.toggle('is-active', chip === button);
+      }
+      renderPool();
+    });
+  }
+
+  const editDialog = $('editDialog');
+  $('editCancel').addEventListener('click', closeEditor);
+  if (editDialog) {
+    editDialog.addEventListener('click', (event) => {
+      if (event.target === editDialog) closeEditor();
+    });
+  }
+  $('editSubmit').addEventListener('click', async () => {
+    if (!state.editSubmit) return;
+    const button = $('editSubmit');
+    setBusy(button, true);
+    try {
+      await state.editSubmit();
+      closeEditor();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(button, false);
+    }
+  });
 
   // -- gateway
   $('genKeyBtn').addEventListener('click', () => generateKey());

@@ -466,11 +466,11 @@ try {
     }
     assert.ok(groups.items.includes('kilo'));
     assert.ok(groups.items.includes('groq'));
-    assert.equal(groups.oauthCount, 11);
+    assert.equal(groups.oauthCount, 12);
   });
 
   await check('every OAuth provider shows the one-click step, not a key form', async () => {
-    for (const id of ['openrouter', 'cline', 'qoder', 'gemini-code-assist', 'trae', 'raccoon', 'zcode', 'minimax-code', 'loomy', 'lobsterai', 'codebuddy']) {
+    for (const id of ['openrouter', 'cline', 'qoder', 'gemini-code-assist', 'trae', 'raccoon', 'zcode', 'minimax-code', 'loomy', 'lobsterai', 'codebuddy', 'workbuddy']) {
       await read(`(() => {
         document.querySelector('.connect-item[data-preset="${id}"]').click();
         return true;
@@ -804,7 +804,8 @@ try {
     assert.match(panel.configPath, /config\.json$/);
     // Port 0 in the test config must be reported as the real bound port.
     assert.doesNotMatch(panel.host, /:0$/, `host shows a placeholder port: ${panel.host}`);
-    assert.ok(Number(panel.channels) >= 3, `expected >=3 channels, got ${panel.channels}`);
+    const channelCount = Number((panel.channels.match(/\d+/) || [])[0]);
+    assert.ok(channelCount >= 3, `expected >=3 channels, got ${panel.channels}`);
   });
 
   await check('the expose-unprefixed toggle round-trips through the API', async () => {

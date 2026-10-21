@@ -167,8 +167,8 @@ async function api(pathname, options = {}) {
 try {
   await check('every preset declares a connection strategy', async () => {
     const all = allConnectInfo();
-    // 20 API-key/keyless presets + 10 OAuth-only channels (OpenRouter is both).
-    assert.equal(all.length, 30);
+    // 20 API-key/keyless presets + 11 OAuth-only channels (OpenRouter is both).
+    assert.equal(all.length, 31);
 
     const ids = new Set();
     for (const entry of all) {
@@ -192,12 +192,14 @@ try {
       'qoder',
       'raccoon',
       'trae',
+      'workbuddy',
       'zcode'
     ]);
 
     assert.equal(connectInfo('openrouter').oauth, 'openrouter');
     assert.equal(connectInfo('cline').oauth, 'cline');
     assert.equal(connectInfo('codebuddy').baseUrl, 'https://copilot.tencent.com');
+    assert.equal(connectInfo('workbuddy').baseUrl, 'https://www.workbuddy.ai');
     assert.equal(connectInfo('ollama').detectUrl, 'http://127.0.0.1:11434/v1/models');
   });
 
@@ -262,12 +264,15 @@ try {
   await check('admin exposes the connection catalogue', async () => {
     const { status, body } = await api('/admin/connect/presets');
     assert.equal(status, 200);
-    assert.equal(body.presets.length, 30);
+    assert.equal(body.presets.length, 31);
     const oauth = body.presets.find((entry) => entry.id === 'openrouter');
     assert.equal(oauth.strategy, 'oauth');
     const cline = body.presets.find((entry) => entry.id === 'cline');
     assert.equal(cline.strategy, 'oauth');
     assert.equal(cline.oauth, 'cline');
+    const workbuddy = body.presets.find((entry) => entry.id === 'workbuddy');
+    assert.equal(workbuddy.strategy, 'oauth');
+    assert.equal(workbuddy.oauth, 'workbuddy');
     const loomy = body.presets.find((entry) => entry.id === 'loomy');
     assert.equal(loomy.strategy, 'oauth');
   });

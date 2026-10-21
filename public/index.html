@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Buddy2API · 多渠道控制台</title>
+    <title>Buddy2API · 多渠道代理池</title>
     <meta name="description" content="把 WorkBuddy、账号渠道与任意 OpenAI 兼容上游，统一变成你自己的 OpenAI / Anthropic 兼容 API" />
     <meta name="color-scheme" content="dark" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/console.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">跳到主内容</a>
@@ -24,7 +24,7 @@
           </div>
           <div class="brand-text">
             <h1>Buddy<span>2API</span></h1>
-            <p>多渠道网关</p>
+            <p>多渠道代理池</p>
           </div>
         </div>
 
@@ -51,9 +51,10 @@
           </button>
           <button class="nav-item" type="button" data-view="accounts">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="8" r="3.4" /><path d="M5 20a7 7 0 0 1 14 0" />
+              <circle cx="9" cy="8" r="3" /><path d="M3 20a6 6 0 0 1 12 0" /><path d="M16 5.5a3 3 0 0 1 0 5.8M18 20a5.5 5.5 0 0 0-3-4.9" />
             </svg>
-            <span>账号</span>
+            <span>代理池</span>
+            <em class="nav-count" id="navPoolCount">0</em>
           </button>
           <button class="nav-item" type="button" data-view="logs">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -85,13 +86,36 @@
         <section class="view" id="view-overview" data-view="overview">
           <header class="view-head">
             <div>
+              <span class="eyebrow">Gateway overview</span>
               <h2>概览</h2>
               <p id="overviewSubtitle">连接渠道，启动本地网关</p>
             </div>
             <div class="view-actions">
-              <button class="ghost" id="refreshAllBtn" type="button">刷新</button>
+              <button class="ghost" id="refreshAllBtn" type="button">刷新状态</button>
             </div>
           </header>
+
+          <div class="flow-strip" aria-label="请求链路">
+            <button class="flow-step" type="button" data-goto="channels">
+              <span class="flow-index">01</span>
+              <span class="flow-copy"><strong>渠道</strong><em id="flowChannels">—</em></span>
+              <span class="flow-arrow" aria-hidden="true">→</span>
+            </button>
+            <button class="flow-step" type="button" data-goto="accounts">
+              <span class="flow-index">02</span>
+              <span class="flow-copy"><strong>代理池</strong><em id="flowAccounts">—</em></span>
+              <span class="flow-arrow" aria-hidden="true">→</span>
+            </button>
+            <button class="flow-step" type="button" data-goto="settings">
+              <span class="flow-index">03</span>
+              <span class="flow-copy"><strong>模型路由</strong><em id="flowModels">—</em></span>
+              <span class="flow-arrow" aria-hidden="true">→</span>
+            </button>
+            <button class="flow-step" type="button" data-goto="overview">
+              <span class="flow-index">04</span>
+              <span class="flow-copy"><strong>API 网关</strong><em id="flowGateway">—</em></span>
+            </button>
+          </div>
 
           <div class="overview-grid">
             <section class="card panel-start" id="cardStart">
@@ -134,64 +158,83 @@
               <div class="inline-msg" id="startMsg" role="status"></div>
             </section>
 
-            <section class="card panel-output" id="cardOutput">
-              <div class="output-empty" id="outputEmpty">
-                <div class="empty-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-                    <rect x="4" y="10" width="16" height="10" rx="3" />
-                    <path d="M8 10V7a4 4 0 0 1 8 0v3" />
-                    <circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none" />
-                  </svg>
+            <div class="overview-side">
+              <section class="card panel-output" id="cardOutput">
+                <div class="output-empty" id="outputEmpty">
+                  <div class="empty-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                      <rect x="4" y="10" width="16" height="10" rx="3" />
+                      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                      <circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none" />
+                    </svg>
+                  </div>
+                  <h3>网关未启动</h3>
+                  <p>完成连接后点击「启动网关」，这里会生成专属地址与密钥。</p>
                 </div>
-                <h3>网关未启动</h3>
-                <p>完成连接后点击「启动网关」，这里会生成专属地址与密钥。</p>
-              </div>
 
-              <div class="output-live" id="outputLive" hidden>
-                <header class="output-head">
-                  <div class="live-title">
-                    <span class="live-dot" aria-hidden="true"></span>
-                    <div>
-                      <h3>网关运行中</h3>
-                      <p id="readyMeta">OpenAI / Anthropic 兼容端点</p>
+                <div class="output-live" id="outputLive" hidden>
+                  <header class="output-head">
+                    <div class="live-title">
+                      <span class="live-dot" aria-hidden="true"></span>
+                      <div>
+                        <h3>网关运行中</h3>
+                        <p id="readyMeta">OpenAI / Anthropic 兼容端点</p>
+                      </div>
                     </div>
+                    <button class="ghost danger" id="stopBtn" type="button">停止</button>
+                  </header>
+
+                  <div class="endpoint">
+                    <div class="endpoint-meta">
+                      <span>BASE URL</span>
+                      <button class="ghost mini" type="button" data-copy="base">复制</button>
+                    </div>
+                    <code id="baseUrlText">—</code>
                   </div>
-                  <button class="ghost danger" id="stopBtn" type="button">停止</button>
+
+                  <div class="endpoint">
+                    <div class="endpoint-meta">
+                      <span>API KEY</span>
+                      <span class="endpoint-actions">
+                        <button class="ghost mini" id="regenBtn" type="button">重新生成</button>
+                        <button class="ghost mini" type="button" data-copy="key">复制</button>
+                      </span>
+                    </div>
+                    <code id="apiKeyText">—</code>
+                  </div>
+
+                  <div class="compat-row">
+                    <span class="tag">OpenAI</span>
+                    <span class="tag">Anthropic</span>
+                    <span class="tag">Streaming</span>
+                    <span class="tag">Tools</span>
+                  </div>
+
+                  <details class="snippet">
+                    <summary>调用示例</summary>
+                    <pre id="snippetText"></pre>
+                    <button class="ghost mini" id="copySnippet" type="button">复制示例</button>
+                  </details>
+                </div>
+              </section>
+
+              <section class="card panel-pool">
+                <header class="card-head compact">
+                  <div class="card-title">
+                    <h3>代理池</h3>
+                    <p id="poolMiniMeta">账号会自动加入调度池</p>
+                  </div>
+                  <button class="ghost mini" type="button" data-goto="accounts">管理</button>
                 </header>
-
-                <div class="endpoint">
-                  <div class="endpoint-meta">
-                    <span>BASE URL</span>
-                    <button class="ghost mini" type="button" data-copy="base">复制</button>
-                  </div>
-                  <code id="baseUrlText">—</code>
+                <div class="pool-mini" id="overviewPool">
+                  <div class="empty-state">还没有账号</div>
                 </div>
-
-                <div class="endpoint">
-                  <div class="endpoint-meta">
-                    <span>API KEY</span>
-                    <span class="endpoint-actions">
-                      <button class="ghost mini" id="regenBtn" type="button">重新生成</button>
-                      <button class="ghost mini" type="button" data-copy="key">复制</button>
-                    </span>
-                  </div>
-                  <code id="apiKeyText">—</code>
-                </div>
-
-                <div class="compat-row">
-                  <span class="tag">OpenAI</span>
-                  <span class="tag">Anthropic</span>
-                  <span class="tag">Streaming</span>
-                  <span class="tag">Tools</span>
-                </div>
-
-                <details class="snippet">
-                  <summary>调用示例</summary>
-                  <pre id="snippetText"></pre>
-                  <button class="ghost mini" id="copySnippet" type="button">复制示例</button>
-                </details>
-              </div>
-            </section>
+                <footer class="pool-mini-foot">
+                  <span id="poolMiniStats">0 个账号 · 0 并发</span>
+                  <button class="link-btn" type="button" data-goto="accounts">查看全部 →</button>
+                </footer>
+              </section>
+            </div>
           </div>
 
           <div class="stat-grid">
@@ -218,42 +261,58 @@
             </div>
           </div>
 
-          <section class="card">
-            <header class="card-head compact">
-              <div class="card-title">
-                <h3>渠道状态</h3>
-                <p id="healthMeta">—</p>
-              </div>
-              <button class="ghost mini" type="button" data-goto="channels">管理渠道</button>
-            </header>
-            <div class="health-grid" id="healthGrid"></div>
-          </section>
+          <div class="overview-bottom">
+            <section class="card">
+              <header class="card-head compact">
+                <div class="card-title">
+                  <h3>渠道状态</h3>
+                  <p id="healthMeta">—</p>
+                </div>
+                <button class="ghost mini" type="button" data-goto="channels">管理渠道</button>
+              </header>
+              <div class="health-grid" id="healthGrid"></div>
+            </section>
 
-          <section class="card">
-            <header class="card-head compact">
-              <div class="card-title">
-                <h3>最近请求</h3>
-                <p id="recentMeta">暂无请求</p>
+            <section class="card">
+              <header class="card-head compact">
+                <div class="card-title">
+                  <h3>最近请求</h3>
+                  <p id="recentMeta">暂无请求</p>
+                </div>
+                <button class="ghost mini" type="button" data-goto="logs">查看全部</button>
+              </header>
+              <div class="log-list" id="recentLogList">
+                <div class="empty-state">启动网关后，这里显示调用记录</div>
               </div>
-              <button class="ghost mini" type="button" data-goto="logs">查看全部</button>
-            </header>
-            <div class="log-list" id="recentLogList">
-              <div class="empty-state">启动网关后，这里显示调用记录</div>
-            </div>
-          </section>
+            </section>
+          </div>
         </section>
 
         <!-- ============================ 渠道 ============================ -->
         <section class="view" id="view-channels" data-view="channels" hidden>
           <header class="view-head">
             <div>
+              <span class="eyebrow">Upstream channels</span>
               <h2>渠道</h2>
               <p id="channelsSubtitle">已连接的上游渠道与账号</p>
             </div>
             <div class="view-actions">
-              <button class="ghost" type="button" data-goto="connect">连接新渠道</button>
+              <button class="ghost" type="button" data-goto="accounts">查看代理池</button>
+              <button class="btn secondary" type="button" data-goto="connect">连接新渠道</button>
             </div>
           </header>
+
+          <div class="guide-bar">
+            <span class="guide-icon" aria-hidden="true">i</span>
+            <p>渠道配置好凭据后，账号会自动加入代理池；模型会出现在 <code>/v1/models</code> 中。多个渠道并存时，模型 ID 会自动带渠道前缀。</p>
+          </div>
+
+          <div class="mini-stats">
+            <span><strong id="channelTotal">0</strong> 个渠道</span>
+            <span><strong id="channelReady">0</strong> 个已就绪</span>
+            <span><strong id="channelAccounts">0</strong> 个入池账号</span>
+            <span><strong id="channelModels">0</strong> 个模型</span>
+          </div>
 
           <div class="toolbar">
             <div class="search">
@@ -315,6 +374,7 @@
         <section class="view" id="view-connect" data-view="connect" hidden>
           <header class="view-head">
             <div>
+              <span class="eyebrow">Connect upstream</span>
               <h2>连接</h2>
               <p id="connectSubtitle">选择一个服务商，按提示完成授权</p>
             </div>
@@ -322,6 +382,28 @@
               <span class="head-state" id="connectState">待选择</span>
             </div>
           </header>
+
+          <div class="guide-bar">
+            <span class="guide-icon" aria-hidden="true">i</span>
+            <p>WorkBuddy / CodeBuddy 也可以在「代理池」直接添加账号；在这里完成授权同样会自动入池，并接入模型路由。</p>
+          </div>
+
+          <div class="wizard-steps" id="connectWizardSteps">
+            <div class="wizard-step is-active" data-step="1">
+              <span>1</span>
+              <div><strong>选择服务商</strong><em>账号授权或 API Key</em></div>
+            </div>
+            <div class="wizard-line" aria-hidden="true"></div>
+            <div class="wizard-step" data-step="2">
+              <span>2</span>
+              <div><strong>完成授权</strong><em>浏览器或 Key 校验</em></div>
+            </div>
+            <div class="wizard-line" aria-hidden="true"></div>
+            <div class="wizard-step" data-step="3">
+              <span>3</span>
+              <div><strong>加入代理池</strong><em>自动接入模型路由</em></div>
+            </div>
+          </div>
 
           <div class="connect-layout">
             <div class="connect-browser">
@@ -346,6 +428,11 @@
               </div>
               <p class="connect-note" id="connectNote"></p>
               <div class="connect-facts" id="connectFacts"></div>
+
+              <div class="connect-pool-hint">
+                <span class="pool-dot" aria-hidden="true"></span>
+                <span>授权成功后会自动写入凭据、加入代理池，并出现在模型路由里。</span>
+              </div>
 
               <div class="connect-step" id="connectStepOauth" hidden>
                 <button class="btn primary btn-block" id="oauthStartBtn" type="button">
@@ -405,14 +492,14 @@
                   <span>打开 Key 页面后自动监听剪贴板，复制到 Key 就自动校验</span>
                 </label>
                 <button class="btn secondary btn-block" id="verifyKeyBtn" type="button">
-                  <span class="btn-label">校验并添加</span>
+                  <span class="btn-label">校验并加入代理池</span>
                   <span class="spinner" aria-hidden="true"></span>
                 </button>
               </div>
 
               <div class="connect-step" id="connectStepKeyless" hidden>
                 <button class="btn secondary btn-block" id="addKeylessBtn" type="button">
-                  <span class="btn-label">直接添加</span>
+                  <span class="btn-label">直接加入代理池</span>
                   <span class="spinner" aria-hidden="true"></span>
                 </button>
                 <div class="field-hint" id="keylessHint">该渠道无需账号与 Key。</div>
@@ -423,26 +510,53 @@
           </div>
         </section>
 
-        <!-- ============================ 账号 ============================ -->
+        <!-- ============================ 代理池 ============================ -->
         <section class="view" id="view-accounts" data-view="accounts" hidden>
           <header class="view-head">
             <div>
-              <h2>账号</h2>
-              <p id="accountsSubtitle">多账号分摊并发，同一会话保持粘滞</p>
+              <span class="eyebrow">Unified account pool</span>
+              <h2>代理池</h2>
+              <p id="accountsSubtitle">所有渠道的账号与凭据，统一调度并发和会话</p>
             </div>
             <div class="view-actions">
-              <button class="ghost mini" id="addAccountBtn" type="button">添加账号</button>
+              <button class="ghost" type="button" data-goto="connect">连接新渠道</button>
+              <button class="btn primary" id="addAccountBtn" type="button">添加账号</button>
             </div>
           </header>
+
+          <div class="pool-summary">
+            <div class="pool-stat">
+              <span>账号</span>
+              <strong id="poolAccountCount">0</strong>
+              <em id="poolAccountMeta">暂无账号</em>
+            </div>
+            <div class="pool-stat">
+              <span>可用并发</span>
+              <strong id="poolConcurrency">0</strong>
+              <em>所有启用账号合计</em>
+            </div>
+            <div class="pool-stat">
+              <span>渠道</span>
+              <strong id="poolChannelCount">0</strong>
+              <em>已接入代理池</em>
+            </div>
+            <div class="pool-stat">
+              <span>会话</span>
+              <strong id="poolSessions">0</strong>
+              <em>粘滞中的会话</em>
+            </div>
+          </div>
 
           <section class="card" id="cardCredentials">
             <header class="card-head">
               <div class="card-title">
-                <h3>WorkBuddy 账号</h3>
-                <p>浏览器授权，或手动填写 Token</p>
+                <h3>添加账号</h3>
+                <p>浏览器授权会自动入池；也可以手动写入 Token</p>
               </div>
               <span class="head-state" id="credState">待填写</span>
             </header>
+
+            <div class="login-channel-picker" id="loginChannelPicker"></div>
 
             <div class="login-panel">
               <button class="btn primary btn-block login-btn" id="loginBtn" type="button">
@@ -505,19 +619,26 @@
                 <h3>账号池</h3>
                 <p id="accountFoot">同一会话会优先使用同一个账号</p>
               </div>
+              <div class="filter-chips" id="poolFilters" role="group" aria-label="筛选账号">
+                <button class="chip is-active" type="button" data-pool-filter="all">全部</button>
+                <button class="chip" type="button" data-pool-filter="active">启用</button>
+                <button class="chip" type="button" data-pool-filter="oauth">账号渠道</button>
+                <button class="chip" type="button" data-pool-filter="key">API Key</button>
+              </div>
             </header>
-            <div class="account-list" id="accountList">
-              <div class="empty-state">暂无账号</div>
+            <div class="pool-groups" id="accountList">
+              <div class="empty-state">暂无账号。连接一个渠道后，账号会自动出现在这里。</div>
             </div>
           </section>
 
-          <section class="card">
-            <div class="stats-head">
-              <div>
-                <h3>当前账号</h3>
-                <p id="userLine">未连接账号</p>
-              </div>
-              <div class="expiry" id="expiryLine">—</div>
+          <section class="card card-quiet pool-rules">
+            <div>
+              <h3>调度规则</h3>
+              <p>同一会话优先粘滞到同一个账号；账号失败自动切换；429 只会让该账号单独冷却，不会拖垮整个池。</p>
+            </div>
+            <div class="pool-rules-meta">
+              <span id="userLine">未连接账号</span>
+              <span id="expiryLine">—</span>
             </div>
           </section>
         </section>
@@ -526,6 +647,7 @@
         <section class="view" id="view-logs" data-view="logs" hidden>
           <header class="view-head">
             <div>
+              <span class="eyebrow">Request log</span>
               <h2>日志</h2>
               <p id="logsSubtitle">最近 60 条请求 · 每 4 秒刷新</p>
             </div>
@@ -556,6 +678,7 @@
         <section class="view" id="view-settings" data-view="settings" hidden>
           <header class="view-head">
             <div>
+              <span class="eyebrow">Routing & runtime</span>
               <h2>设置</h2>
               <p>路由、命名空间与运行信息</p>
             </div>
@@ -595,6 +718,17 @@
           <section class="card">
             <header class="card-head compact">
               <div class="card-title">
+                <h3>路由预览</h3>
+                <p>客户端实际看到的模型 ID</p>
+              </div>
+              <button class="ghost mini" type="button" data-goto="overview">去启动网关</button>
+            </header>
+            <div class="routing-preview" id="routingPreview"></div>
+          </section>
+
+          <section class="card">
+            <header class="card-head compact">
+              <div class="card-title">
                 <h3>运行信息</h3>
                 <p>配置文件与监听地址</p>
               </div>
@@ -603,7 +737,9 @@
               <div><dt>配置文件</dt><dd id="infoConfig">—</dd></div>
               <div><dt>监听地址</dt><dd id="infoHost">—</dd></div>
               <div><dt>鉴权</dt><dd id="infoAuth">—</dd></div>
-              <div><dt>渠道数</dt><dd id="infoChannels">—</dd></div>
+              <div><dt>渠道 / 账号</dt><dd id="infoChannels">—</dd></div>
+              <div><dt>账号数</dt><dd id="infoAccounts">—</dd></div>
+              <div><dt>运行状态</dt><dd id="infoStatus">—</dd></div>
             </dl>
             <div class="channel-add-actions">
               <button class="ghost" id="reloadConfigBtn" type="button">重新读取配置</button>
@@ -626,6 +762,20 @@
         </section>
       </main>
     </div>
+
+    <dialog class="modal" id="editDialog">
+      <div class="modal-card">
+        <header class="modal-head">
+          <h3 id="editTitle">编辑</h3>
+          <p id="editHint"></p>
+        </header>
+        <div class="modal-fields" id="editFields"></div>
+        <footer class="modal-actions">
+          <button class="ghost" id="editCancel" type="button">取消</button>
+          <button class="btn primary" id="editSubmit" type="button">保存</button>
+        </footer>
+      </div>
+    </dialog>
 
     <div class="toast-stack" id="toastStack" aria-live="polite"></div>
     <script src="/app.js" type="module"></script>
