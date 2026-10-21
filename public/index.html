@@ -679,11 +679,17 @@
                 <span class="head-state" id="testStatus">待测试</span>
               </header>
 
-              <div class="field">
-                <label class="field-label">测试模型</label>
-                <div id="testModelSelect" class="cselect" data-placeholder="刷新模型列表后选择"></div>
-                <div class="field-hint" id="testModelHint">正在读取模型列表…</div>
+              <div class="test-picker-grid">
+                <div class="field">
+                  <label class="field-label">渠道</label>
+                  <div id="testChannelSelect" class="cselect" data-placeholder="全部渠道"></div>
+                </div>
+                <div class="field">
+                  <label class="field-label">模型</label>
+                  <div id="testModelSelect" class="cselect" data-placeholder="先选择渠道"></div>
+                </div>
               </div>
+              <div class="field-hint" id="testModelHint">正在读取模型列表…</div>
 
               <details class="advanced">
                 <summary>高级参数</summary>

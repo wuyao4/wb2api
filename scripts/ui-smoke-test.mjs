@@ -793,10 +793,25 @@ try {
 
     const initial = await read(`(() => ({
       count: document.getElementById('testModelCount')?.textContent || '',
+      hasChannel: Boolean(document.getElementById('testChannelSelect')),
       hasSelect: Boolean(document.getElementById('testModelSelect'))
     }))()`);
+    assert.equal(initial.hasChannel, true);
     assert.equal(initial.hasSelect, true);
     assert.match(initial.count, /\d+ 个模型/);
+
+    // Pick a channel first; the model picker is then scoped to it.
+    await read(`document.querySelector('#testChannelSelect .cselect-trigger').click()`);
+    await sleep(250);
+    const channelChosen = await read(`(() => {
+      const row = [...document.querySelectorAll('#testChannelSelect .cselect-option')]
+        .find((item) => /demo/i.test(item.textContent));
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`);
+    assert.equal(channelChosen, true, 'demo channel was not in the test picker');
+    await sleep(250);
 
     await read(`document.querySelector('#testModelSelect .cselect-trigger').click()`);
     await sleep(250);

@@ -43,6 +43,8 @@ const state = {
   openChannels: new Set(),
   channelPoolSignature: '',
   testModelSelect: null,
+  testChannelSelect: null,
+  testChannel: null,
   testBusy: false,
   lastTestOutput: ''
 };
@@ -830,29 +832,95 @@ async function loadModels(force = false) {
   }
 }
 
+function renderTestChannels() {
+  const select = state.testChannelSelect;
+  if (!select) return;
+
+  const channelIds = [...new Set(state.models.map((model) => model.channel).filter(Boolean))];
+  if (!channelIds.length) {
+    select.setOptions([{ value: '', label: '全部渠道（0）' }]);
+    select.setValue('');
+    select.setDisabled(true);
+    state.testChannel = null;
+    return;
+  }
+
+  const options = [{ value: '', label: `全部渠道 · ${state.models.length}` }];
+  for (const id of channelIds) {
+    const models = state.models.filter((model) => model.channel === id);
+    const label =
+      models[0]?.channel_label || channelById(id)?.label || id;
+    options.push({
+      value: id,
+      label: `${label} · ${models.length}`
+    });
+  }
+
+  select.setOptions(options);
+  select.setDisabled(false);
+
+  const valid = state.testChannel !== null && options.some((option) => option.value === state.testChannel);
+  if (!valid) {
+    const preferredChannel = state.models.find(
+      (model) => model.id === state.status?.defaultModel
+    )?.channel;
+    state.testChannel =
+      preferredChannel && channelIds.includes(preferredChannel)
+        ? preferredChannel
+        : channelIds[0];
+  }
+  select.setValue(state.testChannel || '');
+}
+
 function renderTestModels() {
   const select = state.testModelSelect;
   if (!select) return;
 
-  const count = state.models.length;
-  if ($('testModelCount')) {
-    $('testModelCount').textContent = `${count} 个模型`;
-  }
+  renderTestChannels();
 
-  if (!count) {
+  if (!state.models.length) {
     select.setOptions([]);
     select.setDisabled(true);
+    if ($('testModelCount')) $('testModelCount').textContent = '0 个模型';
     if ($('testModelHint')) $('testModelHint').textContent = '没有可用模型，请先连接渠道或刷新模型列表。';
     if ($('runTestBtn')) $('runTestBtn').disabled = true;
     return;
   }
 
+  const allChannels = [...new Set(state.models.map((model) => model.channel).filter(Boolean))];
+  const channelOrder = new Map(allChannels.map((id, index) => [id, index]));
+  const models = (
+    state.testChannel
+      ? state.models.filter((model) => model.channel === state.testChannel)
+      : state.models.slice()
+  ).sort((a, b) => {
+    const orderA = channelOrder.get(a.channel) ?? 999;
+    const orderB = channelOrder.get(b.channel) ?? 999;
+    if (orderA !== orderB) return orderA - orderB;
+    return a.id.localeCompare(b.id);
+  });
+
+  const channelLabel = state.testChannel
+    ? models[0]?.channel_label || channelById(state.testChannel)?.label || state.testChannel
+    : `${allChannels.length} 个渠道`;
+  if ($('testModelCount')) {
+    $('testModelCount').textContent = `${models.length} 个模型 · ${channelLabel}`;
+  }
+
+  if (!models.length) {
+    select.setOptions([]);
+    select.setDisabled(true);
+    if ($('testModelHint')) $('testModelHint').textContent = '该渠道没有可用模型。';
+    if ($('runTestBtn')) $('runTestBtn').disabled = true;
+    return;
+  }
+
   select.setOptions(
-    state.models.map((model) => ({
+    models.map((model) => ({
       value: model.id,
       label: model.id,
+      group: model.channel_label || model.channel || '其他渠道',
       description: [
-        model.channel_label || model.channel || '',
         model.name || '',
         model.context_length || model.context_window
           ? `上下文 ${formatContext(model.context_length || model.context_window)}`
@@ -867,7 +935,7 @@ function renderTestModels() {
   if (!select.getValue() || !select.hasValue(select.getValue())) {
     const preferred = state.status?.defaultModel;
     select.setValue(
-      preferred && select.hasValue(preferred) ? preferred : state.models[0].id
+      preferred && select.hasValue(preferred) ? preferred : models[0].id
     );
   }
   select.setDisabled(false);
@@ -3479,7 +3547,13 @@ class CustomSelect {
         return;
       }
 
+      let lastGroup = '';
       for (const option of visible) {
+        const group = option.group || '';
+        if (group && group !== lastGroup) {
+          optionsBox.appendChild(el('div', 'cselect-group-title', group));
+          lastGroup = group;
+        }
         const row = el('div', `cselect-option${option.value === this.value ? ' is-active' : ''}`);
         row.setAttribute('role', 'option');
         row.setAttribute('aria-selected', option.value === this.value ? 'true' : 'false');
@@ -3717,6 +3791,14 @@ function initSelects() {
     onChange: () => updateTestModelHint()
   });
   state.testModelSelect.setDisabled(true);
+
+  state.testChannelSelect = new CustomSelect($('testChannelSelect'), {
+    onChange: (value) => {
+      state.testChannel = value;
+      renderTestModels();
+    }
+  });
+  state.testChannelSelect.setDisabled(true);
 }
 
 async function init() {
