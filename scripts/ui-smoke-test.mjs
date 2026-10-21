@@ -654,38 +654,38 @@ try {
     assert.deepEqual(result.errors, []);
   });
 
-  await check('a keyless provider adds the channel and offers one-click start', async () => {
+  await check('Kilo requires an API key instead of appearing keyless', async () => {
     await read(`(() => {
       document.querySelector('.connect-item[data-preset="kilo"]').click();
       return true;
     })()`);
-    await sleep(200);
-    await read(`(() => {
-      document.getElementById('addKeylessBtn').click();
-      return true;
-    })()`);
-    await sleep(4000);
+    await sleep(250);
 
-    const result = await read(`(() => ({
-      text: document.getElementById('connectResult')?.textContent || '',
-      hasStart: Boolean(document.querySelector('#connectResult .connect-start')),
+    const panel = await read(`(() => ({
+      name: document.getElementById('connectName')?.textContent || '',
+      keyVisible: !document.getElementById('connectStepKey').hidden,
+      keylessVisible: !document.getElementById('connectStepKeyless').hidden,
+      keyPageVisible: !document.getElementById('openKeyPageBtn').hidden,
       errors: window.__buddyErrors || []
     }))()`);
-    assert.equal(result.hasStart, true, result.text);
-    assert.match(result.text, /已添加|已连接/);
-    assert.deepEqual(result.errors, []);
+    assert.match(panel.name, /Kilo/);
+    assert.equal(panel.keyVisible, true);
+    assert.equal(panel.keylessVisible, false);
+    assert.equal(panel.keyPageVisible, true);
+    assert.deepEqual(panel.errors, []);
   });
 
-  await check('the one-click start button runs the gateway', async () => {
+  await check('the overview start button runs the gateway', async () => {
+    await goto('overview');
     const clicked = await read(`(() => {
-      const button = document.querySelector('#connectResult .connect-start');
-      if (!button) return false;
+      const button = document.getElementById('startBtn');
+      if (!button || button.disabled) return false;
       button.click();
       return true;
     })()`);
-    assert.equal(clicked, true, 'start button missing');
+    assert.equal(clicked, true, 'start button missing or disabled');
 
-    await sleep(7000);
+    await sleep(9000);
     const after = await read(`(() => ({
       running: document.getElementById('statusText')?.textContent || '',
       live: !document.getElementById('outputLive')?.hidden,

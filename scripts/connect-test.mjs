@@ -175,10 +175,23 @@ try {
       assert.ok(!ids.has(entry.id), `duplicate entry ${entry.id}`);
       ids.add(entry.id);
       assert.ok(['oauth', 'open-key', 'keyless'].includes(entry.strategy), entry.id);
-      if (entry.strategy === 'keyless') assert.ok(!entry.apiKeyRequired, entry.id);
+      if (entry.strategy === 'keyless') {
+        assert.ok(!entry.apiKeyRequired, entry.id);
+        assert.equal(entry.local, true, `${entry.id}: remote providers must not be keyless`);
+      }
+      if (entry.strategy === 'open-key') {
+        assert.equal(entry.apiKeyRequired, true, `${entry.id}: key providers must require a key`);
+      }
       if (entry.strategy === 'open-key') assert.ok(entry.keyUrl, `${entry.id} missing keyUrl`);
       if (entry.strategy === 'oauth') assert.ok(entry.oauth, `${entry.id} missing oauth provider`);
     }
+
+    const keyless = all.filter((entry) => entry.strategy === 'keyless').map((entry) => entry.id).sort();
+    assert.deepEqual(keyless, ['llamacpp', 'lmstudio', 'ollama']);
+    const kilo = connectInfo('kilo');
+    assert.equal(kilo.strategy, 'open-key');
+    assert.equal(kilo.apiKeyRequired, true);
+    assert.match(kilo.keyUrl, /kilo\.ai/);
 
     const oauth = all.filter((entry) => entry.strategy === 'oauth').map((entry) => entry.id).sort();
     assert.deepEqual(oauth, [

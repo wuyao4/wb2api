@@ -107,11 +107,11 @@ export const CHANNEL_TYPES = [
   },
   {
     type: 'kilo',
-    label: 'Kilo 免费池',
+    label: 'Kilo Gateway',
     status: 'ready',
     aliasType: 'openai-compatible',
-    auth: '免密',
-    description: 'Kilo 公共网关的免费模型池，无需账号与 Key。'
+    auth: 'API Key',
+    description: 'Kilo 统一网关：需要登录 app.kilo.ai 创建 API Key。'
   },
   {
     type: 'opencode-zen',
@@ -137,16 +137,18 @@ export const CHANNEL_TYPES = [
  * `apiKeyRequired` / `keyless` flags were checked against the live endpoints:
  * a keyless GET /models returning 200 does NOT mean keyless chat — NVIDIA and
  * Vercel publish their catalog publicly and still answer 401 on POST.
- * Only Kilo's free pool and the local runtimes actually chat without a key.
+ * Only the local runtimes actually chat without a key. Kilo's gateway exposes
+ * a public model list in some regions, but chat still needs an account key.
  */
 export const PROVIDER_PRESETS = [
   {
     id: 'kilo',
-    name: 'Kilo.ai 免费池',
+    name: 'Kilo Gateway',
     baseUrl: 'https://api.kilo.ai/api/gateway',
-    apiKeyRequired: false,
-    keyless: true,
-    note: '实测免密可用：模型列表与对话都不需要账号或 Key。上游声明提示可能被记录用于改进服务，请勿发送敏感内容。',
+    apiKeyRequired: true,
+    keyless: false,
+    apiKeyUrl: 'https://app.kilo.ai/profile',
+    note: '需要登录 app.kilo.ai 创建 API Key；匿名只可能访问少量免费模型，付费模型会返回 PAID_MODEL_AUTH_REQUIRED。',
     suggestedModels: ['kilo-auto/free', 'kilo-auto/efficient']
   },
   {

@@ -68,7 +68,6 @@ npm start
 | **MiniMax Code** | 需要（浏览器登录） | 否 | **一键授权** | 官方设备码 + PKCE |
 | **Loomy（讯飞）** | 需要（手机号） | 否 | **短信登录** | 填手机号收验证码，HMAC-SHA1 签名 |
 | **LobsterAI（有道）** | 需要（浏览器登录） | 否 | **一键授权** | 官方门户 + 本机回调 |
-| Kilo.ai 免费池 | 否 | **否** | 免密 | 模型列表与对话均免密，已验证可用 |
 | Ollama / LM Studio / llama.cpp | 否 | **否** | 免密 | 本机运行时，自动探测是否已启动 |
 | Groq | 否 | 是 | 打开官方页 → 自动捕获 | 免费额度，注册即得 |
 | DeepSeek | 否 | 是 | 打开官方页 → 自动捕获 | 需要余额 |
@@ -85,6 +84,7 @@ npm start
 | MiniMax | 否 | 是 | 打开官方页 → 自动捕获 | 注册即得 |
 | OpenCode Zen | 否 | 是 | 打开官方页 → 自动捕获 | 免费层拒绝第三方客户端，需 Console Key |
 | Vercel AI Gateway | 否 | 是 | 打开官方页 → 自动捕获 | 模型列表公开可读，对话仍要 Key |
+| Kilo Gateway | 否 | 是 | 打开官方页 → 自动捕获 | 登录 app.kilo.ai 复制 API Key |
 
 要点：
 
@@ -93,12 +93,12 @@ npm start
   Qoder PKCE 设备码、Google OAuth、TRAE PKCE、Raccoon 扫码、ZCode 服务端中介、
   MiniMax 设备码、Loomy 短信、LobsterAI 回调）。
   登录全程在浏览器（或手机）完成，凭据自动写回，无需复制。
-- **其余 15 家用半自动**：这些服务商没有面向应用的 Key 创建 API。
-  我用无头浏览器实测了 15 个 Key 页面，**全部落到登录墙**，没有一个能在未登录时
+- **其余 16 家用半自动**：这些服务商没有面向应用的 Key 创建 API。
+  我用无头浏览器实测了 16 个 Key 页面，**全部需要登录**，没有一个能在未登录时
   到达"创建 Key"。要自动点按钮就必须先替用户登录、持有其账号会话，
   这是安全与条款取舍而非技术障碍。
 - **复制之后全自动**：点完「打开官方 Key 页面」，控制台监听剪贴板，
-  你复制 Key 的一瞬间它就被自动填入、校验、写盘，并给出「立即启动网关」。
+  你复制 Key 的一瞬间它就被自动填入、校验、写盘，并显示「已加入代理池」。
 - **`GET /models` 返回 200 不代表能对话**。NVIDIA、Vercel、OpenRouter 的模型目录
   都是公开的，但对话接口返回 401。所以校验一律用 `max_tokens: 1` 的真实请求。
 - **OpenCode Zen 不是免密渠道**：它的免费层返回
@@ -109,11 +109,11 @@ npm start
 
 `openai-compatible` 内置预设（来自参考项目的提供商注册表）：
 
-`Kilo.ai 免费池`、`OpenRouter`、`Groq`、`DeepSeek`、`Gemini`、`SiliconFlow`、`NVIDIA NIM`、
+`Kilo Gateway`、`OpenRouter`、`Groq`、`DeepSeek`、`Gemini`、`SiliconFlow`、`NVIDIA NIM`、
 `Cerebras`、`Mistral`、`Together`、`Fireworks`、`xAI`、`Kimi / Moonshot`、`Z.ai`、`MiniMax`、
 `OpenCode Zen`、`Vercel AI Gateway`、`Ollama`、`LM Studio`、`llama.cpp`。
 
-预设只负责填表；除本机运行时和 Kilo 免费池外，通常仍需要自己的 Key。
+预设只负责填表；除本机运行时外，通常仍需要自己的 Key。
 
 ### 规划中（参考 dsh-our-free-model 的账号渠道）
 
@@ -216,14 +216,14 @@ npm start
       ]
     },
 
-    // 一个 OpenAI 兼容渠道的示例（Kilo 免费池）
+    // 一个 OpenAI 兼容渠道的示例（Kilo Gateway，需要 API Key）
     "kilo": {
       "type": "openai-compatible",
       "enabled": true,
-      "label": "Kilo 免费池",
+      "label": "Kilo Gateway",
       "options": {
         "baseUrl": "https://api.kilo.ai/api/gateway",
-        "apiKey": "",
+        "apiKey": "YOUR_KILO_API_KEY",
         "modelsPath": "/models",
         "chatPath": "/chat/completions",
         "includeUsage": true,
@@ -257,8 +257,8 @@ npm start
 | 标记 | 含义 | 你只需要 |
 | --- | --- | --- |
 | **官方 OAuth · 一键** | 上游提供面向应用的授权协议（12 个渠道） | 点「一键授权」，在浏览器登录确认 |
-| **需 API Key** | 上游只提供网页后台（15 个渠道） | 点「打开官方 Key 页面」→ 登录 → 创建 Key → 复制（会自动捕获） |
-| **免密** | 不需要账号（Kilo 免费池 / 本机运行时） | 点「直接添加」 |
+| **需 API Key** | 上游只提供网页后台（16 个渠道） | 点「打开官方 Key 页面」→ 登录 → 创建 Key → 复制（会自动捕获） |
+| **免密** | 不需要账号（Ollama / LM Studio / llama.cpp 本机运行时） | 点「直接添加」 |
 
 无论哪一档，完成后都会显示「已加入代理池」，并给出「查看代理池 / 更新并应用」按钮；凭据、账号和模型路由一次完成。
 
@@ -300,7 +300,7 @@ npm start
 
 **为什么其余渠道不能一键**：它们没有面向第三方应用的 Key 创建 API
 （我核查过 OIDC 发现文档，DeepSeek / Moonshot / 智谱 / MiniMax / SiliconFlow / Cerebras 全部缺失）。
-我用无头浏览器实测了 15 个 Key 页面：**全部落到登录墙**，没有一个能在未登录状态下到达"创建 Key"。
+我用无头浏览器实测了 16 个 Key 页面：全部需要登录，没有一个能在未登录状态下到达"创建 Key"。
 要自动点按钮就必须先替用户登录、持有其账号会话，这不是技术障碍而是安全与条款取舍，
 因此选择"打开官方页 + 剪贴板自动捕获 + 自动校验"。
 
@@ -342,7 +342,7 @@ npm start
 ```bash
 curl http://127.0.0.1:8787/admin/channels/create ^
   -H "Content-Type: application/json" ^
-  -d "{\"id\":\"kilo\",\"type\":\"openai-compatible\",\"label\":\"Kilo\",\"baseUrl\":\"https://api.kilo.ai/api/gateway\",\"models\":\"\"}"
+  -d "{\"id\":\"kilo\",\"type\":\"openai-compatible\",\"label\":\"Kilo Gateway\",\"baseUrl\":\"https://api.kilo.ai/api/gateway\",\"apiKey\":\"YOUR_KILO_API_KEY\",\"models\":\"\"}"
 ```
 
 ### 新增渠道类型（代码）
@@ -563,4 +563,4 @@ WB2API_LIVE=1 WB2API_LIVE_GROQ_KEY=gsk_xxx node scripts/live-connect.mjs
 - 统计和日志只保存在内存中，重启进程后清空。
 - 上游返回的 `reasoning_content`（思维链）在流式响应中原样保留，非流式放在
   `message.reasoning_content`；Anthropic 接口会转为 `thinking` 块。
-- Kilo 免费池由上游免费提供，其模型卡声明提示可能被记录用于改进服务；请勿发送敏感内容。
+- Kilo Gateway 的模型目录与额度由 Kilo 账号决定；使用前需要在 app.kilo.ai 登录并创建 API Key。

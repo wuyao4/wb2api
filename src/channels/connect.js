@@ -13,7 +13,7 @@ import { PROVIDER_PRESETS, presetById } from './catalog.js';
  *   'open-key' — no authorization API exists. The best we can do is deep-link
  *                to the official key page, then take the pasted key and verify
  *                it against the real chat endpoint.
- *   'keyless'  — no account at all (Kilo free pool, local runtimes).
+ *   'keyless'  — no account at all (local runtimes only).
  *
  * The `keyUrl` values are the official pages, verified reachable. They are
  * documentation/entry points, not scraped forms: we never automate a vendor's
@@ -21,7 +21,10 @@ import { PROVIDER_PRESETS, presetById } from './catalog.js';
  */
 
 const CONNECT_META = {
-  kilo: { strategy: 'keyless' },
+  kilo: {
+    strategy: 'open-key',
+    keyUrl: 'https://app.kilo.ai/profile'
+  },
   ollama: { strategy: 'keyless', local: true, detect: 'http://127.0.0.1:11434/v1/models' },
   lmstudio: { strategy: 'keyless', local: true, detect: 'http://127.0.0.1:1234/v1/models' },
   llamacpp: { strategy: 'keyless', local: true, detect: 'http://127.0.0.1:8080/v1/models' },

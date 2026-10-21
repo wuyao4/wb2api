@@ -316,7 +316,7 @@ CodeArts / LobsterAI）通常需要：
 `ACCOUNT_CHANNEL_SPECS` 加一条 spec（base URL、路径、额外头、兜底模型）。
 
 **不要**用无头浏览器自动化厂商的登录页面：那会违反条款，且必然被 CSRF、
-验证码与 Cloudflare 拦住（实测 15 个 Key 页面全部落到登录墙）；
+验证码与 Cloudflare 拦住（实测 16 个 Key 页面全部需要登录）；
 同时也意味着要经手用户的账号会话。
 没有官方授权 API 的渠道，一律用 `open-key` 策略（打开官方页 + 校验粘贴/剪贴板捕获的 Key）。
 
@@ -336,7 +336,7 @@ CodeArts / LobsterAI）通常需要：
 | CodeBuddy | `product.ts`（`CODEBUDDY`） | **已实现**（复用 WorkBuddy 运行时） |
 | CodeArts | `codearts-credits.ts`、`direct-fetch.ts` | 待移植（专有 HMAC + 积分） |
 | OpenCode | `opencode-auth.ts`、`opencode.ts` | 不支持（免费层拒绝第三方客户端） |
-| Kilo（免密） | `src/kilo.js` | 已用 `openai-compatible` 预设覆盖 |
+| Kilo（API Key） | `src/kilo.js` | 已用 `openai-compatible` 预设覆盖 |
 
 移植时建议只取 **认证 + 上游请求** 两部分，把模型列表转换为本项目的模型结构；
 不要引入参考项目的 DSH 内核依赖、积分体系或 UI。

@@ -10,8 +10,8 @@
 | 能力 | 数量 | 渠道 |
 | --- | --- | --- |
 | **真·一键**（点一下 → 浏览器授权 → 凭据自动写回） | **12** | OpenRouter、WorkBuddy、CodeBuddy、Cline、Qoder、Gemini Code Assist、TRAE、Raccoon、ZCode、MiniMax Code、Loomy、LobsterAI |
-| **半自动**（打开官方 Key 页 → 复制 → 自动捕获校验 → 一键启动） | 15 | Groq、DeepSeek、Gemini、SiliconFlow、NVIDIA、Cerebras、Mistral、Together、Fireworks、xAI、Moonshot、Z.ai、MiniMax、OpenCode Zen、Vercel |
-| **完全免密** | 4 | Kilo 免费池、Ollama、LM Studio、llama.cpp |
+| **半自动**（打开官方 Key 页 → 复制 → 自动捕获校验 → 自动入池） | 16 | Groq、DeepSeek、Gemini、SiliconFlow、NVIDIA、Cerebras、Mistral、Together、Fireworks、xAI、Moonshot、Z.ai、MiniMax、OpenCode Zen、Vercel、Kilo Gateway |
+| **完全免密** | 3 | Ollama、LM Studio、llama.cpp |
 
 合计 31 个渠道（OpenRouter 同时属于"一键"与预设；WorkBuddy / CodeBuddy 是两个独立渠道实例）。
 
@@ -114,7 +114,7 @@ Raccoon **不是** OAuth 渠道：桌面端走 `office-raccoon://auth/callback`�
 
 ---
 
-## 三、为什么其余 15 家不能一键
+## 三、为什么其余 16 家不能一键
 
 ### 3.1 参考项目是怎么做的（重要更正）
 
@@ -131,7 +131,7 @@ Raccoon **不是** OAuth 渠道：桌面端走 `office-raccoon://auth/callback`�
 
 它没有任何一处用无头浏览器去点"Create API Key"。上面这些账号渠道的移植正是照这个思路做的。
 
-### 3.2 实测：这 15 个 Key 页面能不能直接驱动
+### 3.2 实测：这 16 个 Key 页面能不能直接驱动
 
 用无头 Chrome 逐个加载（并去掉 `AutomationControlled` 特征），记录最终落点：
 
@@ -152,15 +152,16 @@ Raccoon **不是** OAuth 渠道：桌面端走 `office-raccoon://auth/callback`�
 | SiliconFlow | account.siliconflow.com/**login** | 登录墙 |
 | xAI | console.x.ai（Cloudflare） | 拦截页 |
 | Mistral | v2.auth.mistral.ai/**login** | 登录墙 |
+| Kilo | app.kilo.ai/profile | 登录后才能看到 API Key |
 
-**15 个里 8 个直接跳登录墙，其余未登录时不渲染可操作内容；没有一个能在不登录的情况下到达"创建 Key"。**
+**16 个里 9 个直接跳登录墙，其余未登录时不渲染可操作内容；没有一个能在不登录的情况下到达"创建 Key"。**
 
 要自动点按钮，就必须先替用户登录——持有其账号密码或已登录 Cookie。
 这不是技术难度问题，而是安全与条款取舍：这些服务商都没有提供面向第三方应用的
 Key 创建 API（我也核查了 OIDC 发现文档，DeepSeek / Moonshot / 智谱 / MiniMax /
 SiliconFlow / Cerebras 全部缺失）。
 
-因此这 15 家用"打开官方页 + 剪贴板自动捕获 + 真实对话校验"的半自动流程。
+因此这 16 家用"打开官方页 + 剪贴板自动捕获 + 真实对话校验"的半自动流程。
 
 ---
 
@@ -211,14 +212,13 @@ SiliconFlow / Cerebras 全部缺失）。
 
 ---
 
-## 五、免密渠道
+## 五、免密渠道复核
 
 | 渠道 | 实测 |
 | --- | --- |
-| Kilo.ai 免费池 | `GET /models` 200（400 个模型），对话 200，无需任何凭据 |
 | Ollama / LM Studio / llama.cpp | 探测 `127.0.0.1` 对应端口；服务没启动时明确报错 |
 
-Kilo 免费池的上游声明提示可能被记录用于改进服务，控制台与 README 都保留了这条提醒。
+Kilo Gateway **不是免密渠道**：匿名 `GET /models` 可能返回 200，少量免费模型也可能偶然返回 200；但付费模型会返回 `401 PAID_MODEL_AUTH_REQUIRED`（“You need to sign in to use this model.”）。已归类为“需 API Key”，不能把公开模型目录或免费模型当作稳定的免密凭据。
 
 ---
 
