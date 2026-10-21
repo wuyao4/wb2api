@@ -460,7 +460,7 @@ try {
       items: [...document.querySelectorAll('.connect-item')].map((el) => el.dataset.preset),
       oauthCount: document.querySelectorAll('.connect-item .is-oauth-label').length
     }))()`);
-    assert.equal(groups.titles.length, 3, groups.titles.join('|'));
+    assert.equal(groups.titles.length, 2, groups.titles.join('|'));
     assert.ok(groups.items.length >= 25, `only ${groups.items.length} providers`);
     for (const id of ['openrouter', 'cline', 'qoder', 'trae', 'raccoon', 'zcode', 'minimax-code', 'loomy', 'lobsterai']) {
       assert.ok(groups.items.includes(id), `missing ${id}`);

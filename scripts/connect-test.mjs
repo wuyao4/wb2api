@@ -1,9 +1,8 @@
 /**
  * Connection-layer tests.
  *
- * Covers the three strategies without touching real vendor accounts:
+ * Covers the connection strategies without touching real vendor accounts:
  *   - key verification against a mock upstream (success / 401 / 402 / 429)
- *   - local runtime detection
  *   - the OpenRouter OAuth PKCE handshake end to end, with the exchange
  *     endpoint pointed at a local mock
  */
@@ -126,7 +125,7 @@ process.env.WB2API_CONFIG = configPath;
 // Point the PKCE exchange at the local mock before the module is imported.
 process.env.WB2API_OPENROUTER_EXCHANGE_URL = `http://127.0.0.1:${oauthPort}/auth/keys`;
 
-const { verifyProviderKey, connectInfo, allConnectInfo, detectLocal } = await import(
+const { verifyProviderKey, connectInfo, allConnectInfo } = await import(
   '../src/channels/connect.js'
 );
 const { OpenRouterOAuth } = await import('../src/channels/oauth/openrouter.js');
@@ -167,8 +166,8 @@ async function api(pathname, options = {}) {
 try {
   await check('every preset declares a connection strategy', async () => {
     const all = allConnectInfo();
-    // 20 API-key/keyless presets + 11 OAuth-only channels (OpenRouter is both).
-    assert.equal(all.length, 31);
+    // 16 API-key presets + 11 OAuth-only channels + OpenRouter (OAuth, also a preset).
+    assert.equal(all.length, 28);
 
     const ids = new Set();
     for (const entry of all) {
@@ -187,7 +186,7 @@ try {
     }
 
     const keyless = all.filter((entry) => entry.strategy === 'keyless').map((entry) => entry.id).sort();
-    assert.deepEqual(keyless, ['llamacpp', 'lmstudio', 'ollama']);
+    assert.deepEqual(keyless, []);
     const kilo = connectInfo('kilo');
     assert.equal(kilo.strategy, 'open-key');
     assert.equal(kilo.apiKeyRequired, true);
@@ -213,7 +212,6 @@ try {
     assert.equal(connectInfo('cline').oauth, 'cline');
     assert.equal(connectInfo('codebuddy').baseUrl, 'https://copilot.tencent.com');
     assert.equal(connectInfo('workbuddy').baseUrl, 'https://www.workbuddy.ai');
-    assert.equal(connectInfo('ollama').detectUrl, 'http://127.0.0.1:11434/v1/models');
   });
 
   await check('a working key passes the chat probe', async () => {
@@ -269,15 +267,10 @@ try {
     );
   });
 
-  await check('local runtime detection reports a stopped service', async () => {
-    const result = await detectLocal('ollama');
-    assert.equal(result.running, false);
-  });
-
   await check('admin exposes the connection catalogue', async () => {
     const { status, body } = await api('/admin/connect/presets');
     assert.equal(status, 200);
-    assert.equal(body.presets.length, 31);
+    assert.equal(body.presets.length, 28);
     const oauth = body.presets.find((entry) => entry.id === 'openrouter');
     assert.equal(oauth.strategy, 'oauth');
     const cline = body.presets.find((entry) => entry.id === 'cline');

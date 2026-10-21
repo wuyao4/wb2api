@@ -1489,11 +1489,6 @@ const STRATEGY_GROUP = [
     hint: '官方授权，点一下即可'
   },
   {
-    id: 'keyless',
-    title: '免密渠道',
-    hint: '无需账号或 Key'
-  },
-  {
     id: 'open-key',
     title: 'API Key 渠道',
     hint: '复制 Key 后自动捕获'

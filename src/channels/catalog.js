@@ -278,33 +278,6 @@ export const PROVIDER_PRESETS = [
     apiKeyRequired: true,
     apiKeyUrl: 'https://vercel.com/docs/ai-gateway',
     note: '模型列表公开可读，但对话必须带 Vercel 账号的 Key。'
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama（本机）',
-    baseUrl: 'http://127.0.0.1:11434/v1',
-    apiKeyRequired: false,
-    keyless: true,
-    local: true,
-    note: '本机运行时，无需账号与 Key；需要先在本机安装并拉取模型。'
-  },
-  {
-    id: 'lmstudio',
-    name: 'LM Studio（本机）',
-    baseUrl: 'http://127.0.0.1:1234/v1',
-    apiKeyRequired: false,
-    keyless: true,
-    local: true,
-    note: '本机运行时，在 LM Studio 里启动 Local Server 即可。'
-  },
-  {
-    id: 'llamacpp',
-    name: 'llama.cpp（本机）',
-    baseUrl: 'http://127.0.0.1:8080/v1',
-    apiKeyRequired: false,
-    keyless: true,
-    local: true,
-    note: '本机 llama-server，无需账号与 Key。'
   }
 ];
 

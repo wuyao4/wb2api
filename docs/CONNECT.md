@@ -11,9 +11,8 @@
 | --- | --- | --- |
 | **真·一键**（点一下 → 浏览器授权 → 凭据自动写回） | **12** | OpenRouter、WorkBuddy、CodeBuddy、Cline、Qoder、Gemini Code Assist、TRAE、Raccoon、ZCode、MiniMax Code、Loomy、LobsterAI |
 | **半自动**（打开官方 Key 页 → 复制 → 自动捕获校验 → 自动入池） | 16 | Groq、DeepSeek、Gemini、SiliconFlow、NVIDIA、Cerebras、Mistral、Together、Fireworks、xAI、Moonshot、Z.ai、MiniMax、OpenCode Zen、Vercel、Kilo Gateway |
-| **完全免密** | 3 | Ollama、LM Studio、llama.cpp |
 
-合计 31 个渠道（OpenRouter 同时属于"一键"与预设；WorkBuddy / CodeBuddy 是两个独立渠道实例）。
+合计 28 个渠道（OpenRouter 同时属于"一键"与预设；WorkBuddy / CodeBuddy 是两个独立渠道实例）。
 
 ---
 
@@ -156,6 +155,8 @@ Raccoon **不是** OAuth 渠道：桌面端走 `office-raccoon://auth/callback`�
 
 **16 个里 9 个直接跳登录墙，其余未登录时不渲染可操作内容；没有一个能在不登录的情况下到达"创建 Key"。**
 
+> Kilo 复核：匿名 `GET /models` 可能返回 200，少量免费模型也可能偶然返回 200；但付费模型会返回 `401 PAID_MODEL_AUTH_REQUIRED`（“You need to sign in to use this model.”）。因此 Kilo 已归类为“需 API Key”，不能把公开目录或免费模型当作稳定的免密凭据。
+
 要自动点按钮，就必须先替用户登录——持有其账号密码或已登录 Cookie。
 这不是技术难度问题，而是安全与条款取舍：这些服务商都没有提供面向第三方应用的
 Key 创建 API（我也核查了 OIDC 发现文档，DeepSeek / Moonshot / 智谱 / MiniMax /
@@ -212,13 +213,9 @@ SiliconFlow / Cerebras 全部缺失）。
 
 ---
 
-## 五、免密渠道复核
+## 五、本机运行时
 
-| 渠道 | 实测 |
-| --- | --- |
-| Ollama / LM Studio / llama.cpp | 探测 `127.0.0.1` 对应端口；服务没启动时明确报错 |
-
-Kilo Gateway **不是免密渠道**：匿名 `GET /models` 可能返回 200，少量免费模型也可能偶然返回 200；但付费模型会返回 `401 PAID_MODEL_AUTH_REQUIRED`（“You need to sign in to use this model.”）。已归类为“需 API Key”，不能把公开模型目录或免费模型当作稳定的免密凭据。
+内置连接向导不再提供 Ollama / LM Studio / llama.cpp 预设。需要本机模型时，用「渠道 → 自定义渠道」手动填写对应的 `http://127.0.0.1:<port>/v1` 即可。
 
 ---
 
@@ -226,8 +223,7 @@ Kilo Gateway **不是免密渠道**：匿名 `GET /models` 可能返回 200，�
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/admin/connect/presets` | 31 个渠道及其连接策略 |
-| GET | `/admin/connect/local?preset=ollama` | 探测本机运行时 |
+| GET | `/admin/connect/presets` | 28 个渠道及其连接策略 |
 | GET | `/admin/connect/clipboard` | 读取剪贴板中的 Key 候选（只返回形状检查通过的） |
 | POST | `/admin/connect/verify` | 用真实对话校验 Key（不落盘） |
 | POST | `/admin/connect/oauth/start` | 发起授权，返回 `mode` / `authUrl` / `userCode` / `qrSvg` |

@@ -25,7 +25,7 @@ npm start
 1. **连接 WorkBuddy**：点击「使用 WorkBuddy 账号登录」，浏览器完成授权后自动写入 token；
    也可以展开「手动填写 Token」粘贴 access token / refresh token / 请求头文本。
 2. **（可选）添加更多渠道**：在「渠道」卡片点击「添加渠道」，选择预设（Kilo、OpenRouter、Groq、
-   DeepSeek、Gemini、Ollama…）或填自定义 Base URL。
+   DeepSeek、Gemini、SiliconFlow…）或填自定义 Base URL。
 3. **生成反代与密钥**：选择默认模型，API Key 留空会自动生成。
 4. **启动反代**，复制页面显示的 Base URL 与 Key。
 
@@ -46,7 +46,7 @@ npm start
 | 类型 | 说明 | 认证 |
 | --- | --- | --- |
 | `workbuddy` | 腾讯 WorkBuddy / CodeBuddy 账号渠道，支持多账号、会话粘滞、429 冷却、浏览器登录 | 浏览器授权 / Token |
-| `openai-compatible` | 任何提供 `POST /chat/completions` 与 `GET /models` 的上游 | API Key / 免密 |
+| `openai-compatible` | 任何提供 `POST /chat/completions` 与 `GET /models` 的上游 | API Key（也支持自定义免密地址） |
 
 ### 预设是否需要“登录”？
 
@@ -68,7 +68,6 @@ npm start
 | **MiniMax Code** | 需要（浏览器登录） | 否 | **一键授权** | 官方设备码 + PKCE |
 | **Loomy（讯飞）** | 需要（手机号） | 否 | **短信登录** | 填手机号收验证码，HMAC-SHA1 签名 |
 | **LobsterAI（有道）** | 需要（浏览器登录） | 否 | **一键授权** | 官方门户 + 本机回调 |
-| Ollama / LM Studio / llama.cpp | 否 | **否** | 免密 | 本机运行时，自动探测是否已启动 |
 | Groq | 否 | 是 | 打开官方页 → 自动捕获 | 免费额度，注册即得 |
 | DeepSeek | 否 | 是 | 打开官方页 → 自动捕获 | 需要余额 |
 | Gemini（OpenAI 兼容） | 否 | 是 | 打开官方页 → 自动捕获 | AI Studio 创建 Key，有免费额度 |
@@ -111,9 +110,9 @@ npm start
 
 `Kilo Gateway`、`OpenRouter`、`Groq`、`DeepSeek`、`Gemini`、`SiliconFlow`、`NVIDIA NIM`、
 `Cerebras`、`Mistral`、`Together`、`Fireworks`、`xAI`、`Kimi / Moonshot`、`Z.ai`、`MiniMax`、
-`OpenCode Zen`、`Vercel AI Gateway`、`Ollama`、`LM Studio`、`llama.cpp`。
+`OpenCode Zen`、`Vercel AI Gateway`。
 
-预设只负责填表；除本机运行时外，通常仍需要自己的 Key。
+预设只负责填表；这些渠道通常仍需要自己的 Key。
 
 ### 规划中（参考 dsh-our-free-model 的账号渠道）
 
@@ -258,7 +257,6 @@ npm start
 | --- | --- | --- |
 | **官方 OAuth · 一键** | 上游提供面向应用的授权协议（12 个渠道） | 点「一键授权」，在浏览器登录确认 |
 | **需 API Key** | 上游只提供网页后台（16 个渠道） | 点「打开官方 Key 页面」→ 登录 → 创建 Key → 复制（会自动捕获） |
-| **免密** | 不需要账号（Ollama / LM Studio / llama.cpp 本机运行时） | 点「直接添加」 |
 
 无论哪一档，完成后都会显示「已加入代理池」，并给出「查看代理池 / 更新并应用」按钮；凭据、账号和模型路由一次完成。
 
@@ -404,8 +402,7 @@ curl http://127.0.0.1:8787/admin/channels/create ^
 | POST | `/admin/channels/test` | 校验渠道凭据并刷新模型 |
 | POST | `/admin/channels/toggle` | 启用 / 停用渠道 |
 | POST | `/admin/channels/remove` | 删除渠道 |
-| GET | `/admin/connect/presets` | 预设及其连接策略（oauth / open-key / keyless） |
-| GET | `/admin/connect/local?preset=ollama` | 探测本机运行时是否已启动 |
+| GET | `/admin/connect/presets` | 预设及其连接策略（oauth / open-key） |
 | GET | `/admin/connect/clipboard` | 读取剪贴板中的 Key 候选（只返回形状检查通过的） |
 | POST | `/admin/connect/verify` | 用真实对话校验 API Key（不落盘） |
 | POST | `/admin/connect/oauth/start` | 发起一键授权（返回 mode / authUrl / userCode / qrSvg） |

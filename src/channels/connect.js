@@ -25,9 +25,6 @@ const CONNECT_META = {
     strategy: 'open-key',
     keyUrl: 'https://app.kilo.ai/profile'
   },
-  ollama: { strategy: 'keyless', local: true, detect: 'http://127.0.0.1:11434/v1/models' },
-  lmstudio: { strategy: 'keyless', local: true, detect: 'http://127.0.0.1:1234/v1/models' },
-  llamacpp: { strategy: 'keyless', local: true, detect: 'http://127.0.0.1:8080/v1/models' },
 
   openrouter: {
     strategy: 'oauth',

@@ -7,10 +7,10 @@
  *   WB2API_LIVE=1 node scripts/live-connect.mjs
  *   WB2API_LIVE=1 WB2API_LIVE_GROQ_KEY=gsk_... node scripts/live-connect.mjs
  *
- * With no keys it still checks every provider's key page and the keyless
- * channels, which is the part that can be verified without an account.
+ * With no keys it still checks every provider's key page, which is the part
+ * that can be verified without an account.
  */
-import { allConnectInfo, detectLocal, verifyProviderKey } from '../src/channels/connect.js';
+import { allConnectInfo, verifyProviderKey } from '../src/channels/connect.js';
 
 if (process.env.WB2API_LIVE !== '1') {
   console.log('skip: set WB2API_LIVE=1 to probe real endpoints');
@@ -61,20 +61,6 @@ for (const entry of allConnectInfo()) {
     if (res.status === 404 || res.status === 410) throw new Error(`HTTP ${res.status}`);
     console.log(`        ${entry.id}: HTTP ${res.status}`);
   });
-}
-
-console.log('\n== keyless channels ==');
-for (const id of ['kilo']) {
-  await run(`${id} is usable without a key`, async () => {
-    const result = await verifyProviderKey({ presetId: id });
-    console.log(`        ${result.message}`);
-  });
-}
-
-console.log('\n== local runtimes ==');
-for (const id of ['ollama', 'lmstudio', 'llamacpp']) {
-  const result = await detectLocal(id);
-  console.log(`        ${id}: ${result.running ? `running (${result.models.length} models)` : 'not running'}`);
 }
 
 console.log('\n== supplied keys ==');
