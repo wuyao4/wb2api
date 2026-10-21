@@ -10,7 +10,7 @@ import {
 } from '../protocol/anthropic.js';
 import { collectOpenAICompletion, relayOpenAIStream } from '../protocol/openai.js';
 
-async function readUpstreamError(upstream) {
+export async function readUpstreamError(upstream) {
   const text = await upstream.text().catch(() => '');
   let json = null;
   try {
@@ -186,6 +186,137 @@ export async function handleOpenAIChat(runtime, req, res) {
       });
     }
     if (!res.writableEnded) res.end();
+  }
+}
+
+/**
+ * Run a one-off chat against a specific model for the console playground.
+ *
+ * This deliberately bypasses `runtime.running`: the operator can test a
+ * credential/model before opening the public proxy. It still uses the same
+ * channel pool, session isolation, token refresh and error handling as the
+ * real endpoint, and records the attempt in the request log.
+ */
+export async function testChat(runtime, input = {}) {
+  const requestedModel = String(input.model || runtime.config.routing.defaultModel || '').trim();
+  if (!requestedModel) throw new HttpError(400, '缺少 model');
+
+  const prompt = String(input.input ?? input.prompt ?? '').trim();
+  if (!prompt) throw new HttpError(400, '请输入测试内容');
+
+  const system = String(input.system || '').trim();
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: prompt });
+
+  const requestBody = { model: requestedModel, messages, stream: true };
+  const maxTokens = Number(input.maxTokens);
+  if (Number.isFinite(maxTokens) && maxTokens > 0) {
+    requestBody.max_tokens = Math.max(1, Math.min(8192, Math.round(maxTokens)));
+  }
+  const temperature = Number(input.temperature);
+  if (Number.isFinite(temperature) && temperature >= 0 && temperature <= 2) {
+    requestBody.temperature = temperature;
+  }
+
+  const resolved = runtime.resolveModel(requestedModel);
+  const channel = resolved.channel;
+  const upstreamBody = channel.prepareRequest(requestBody, resolved.model);
+  const started = Date.now();
+  const timeoutMs = Math.max(5000, Math.min(300000, Number(input.timeoutMs) || 120000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let firstTokenMs = null;
+  let slot = null;
+
+  try {
+    slot = await channel.chat({
+      body: upstreamBody,
+      options: { signal: controller.signal, conversationId: `test-${started}` },
+      sessionKey: `test:${started}:${Math.random().toString(36).slice(2)}`,
+      model: resolved.model
+    });
+
+    if (!slot.res.ok) {
+      const err = await readUpstreamError(slot.res);
+      const status = slot.res.status === 429 ? 429 : slot.res.status >= 500 ? 502 : slot.res.status;
+      const message =
+        slot.res.status === 429
+          ? `${err.message} - ${channel.label} 限流 / 模型繁忙`
+          : err.message;
+      throw new HttpError(status, message, { code: err.code });
+    }
+
+    const completion = await collectOpenAICompletion({
+      body: slot.res.body,
+      requestedModel,
+      onFirstChunk: () => {
+        if (firstTokenMs === null) firstTokenMs = Date.now() - started;
+      }
+    });
+
+    const message = completion.choices?.[0]?.message || {};
+    const usage = completion.usage || null;
+    const result = {
+      requestedModel,
+      model: completion.model || slot.model || resolved.model,
+      upstreamModel: slot.model || resolved.model,
+      channel: channel.id,
+      channelLabel: channel.label,
+      account: slot.account?.label || '',
+      content: typeof message.content === 'string' ? message.content : '',
+      reasoning: typeof message.reasoning_content === 'string' ? message.reasoning_content : '',
+      toolCalls: message.tool_calls || null,
+      finishReason: completion.choices?.[0]?.finish_reason || null,
+      usage,
+      ttfbMs: firstTokenMs,
+      durationMs: Date.now() - started,
+      completion
+    };
+
+    recordRequest({
+      kind: 'test',
+      channel: channel.id,
+      channelLabel: channel.label,
+      model: requestedModel,
+      upstreamModel: result.upstreamModel,
+      account: result.account,
+      stream: false,
+      status: 200,
+      durationMs: result.durationMs,
+      ttfbMs: firstTokenMs,
+      promptTokens: usage?.prompt_tokens,
+      completionTokens: usage?.completion_tokens
+    });
+    return result;
+  } catch (err) {
+    const aborted = controller.signal.aborted || err.name === 'AbortError';
+    const status = aborted ? 504 : err.status || 502;
+    const message = aborted
+      ? `测试超时（${Math.round(timeoutMs / 1000)} 秒），上游没有返回完整结果`
+      : err.message;
+    recordRequest({
+      kind: 'test',
+      channel: channel.id,
+      channelLabel: channel.label,
+      model: requestedModel,
+      upstreamModel: resolved.model,
+      account: slot?.account?.label || '',
+      stream: false,
+      status,
+      durationMs: Date.now() - started,
+      ttfbMs: firstTokenMs,
+      error: message
+    });
+    if (err instanceof HttpError && !aborted) throw err;
+    throw new HttpError(status, message);
+  } finally {
+    clearTimeout(timer);
+    try {
+      slot?.release?.();
+    } catch {
+      /* ignore */
+    }
   }
 }
 

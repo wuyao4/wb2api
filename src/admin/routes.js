@@ -10,6 +10,7 @@ import { log, warn } from '../core/logger.js';
 import { getLogs, getStats } from '../core/store.js';
 import { slug } from '../core/util.js';
 import { startProxy } from '../serving/start.js';
+import { testChat } from '../serving/chat.js';
 
 function modelRows(input) {
   if (Array.isArray(input)) return input;
@@ -189,6 +190,12 @@ export async function handleAdmin(runtime, req, res, { pathname, url }) {
     if (req.method === 'GET' && pathname === '/admin/models') {
       const data = await runtime.listModels();
       return sendJson(res, 200, { ok: true, data });
+    }
+
+    if (req.method === 'POST' && pathname === '/admin/test-chat') {
+      const body = await readJson(req, runtime.config.server.requestBodyLimitMb);
+      const result = await testChat(runtime, body);
+      return sendJson(res, 200, { ok: true, ...result });
     }
 
     if (req.method === 'GET' && pathname === '/admin/logs') {

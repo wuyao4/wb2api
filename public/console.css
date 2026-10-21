@@ -3077,6 +3077,226 @@ select {
   }
 }
 
+/* --------------------------------------------------------------- playground */
+
+.test-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.test-form {
+  display: grid;
+  gap: 2px;
+}
+
+.test-form .field {
+  margin-bottom: 12px;
+}
+
+.test-form .advanced {
+  margin-bottom: 14px;
+}
+
+.advanced-grid label.is-wide {
+  grid-column: 1 / -1;
+}
+
+.advanced-grid textarea {
+  min-height: 74px;
+  font-size: 13.2px;
+}
+
+.test-input {
+  min-height: 210px;
+  font-size: 14.4px;
+  line-height: 1.65;
+}
+
+.test-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.test-actions .inline-msg {
+  margin-top: 0;
+}
+
+.test-output-card {
+  position: sticky;
+  top: 24px;
+  min-height: 430px;
+}
+
+.test-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 340px;
+  padding: 30px 20px;
+  color: var(--faint);
+  text-align: center;
+  border: 1px dashed rgba(255, 255, 255, 0.11);
+  border-radius: var(--radius-md);
+}
+
+.test-empty strong {
+  color: var(--text-soft);
+  font-size: 14.4px;
+  font-weight: 600;
+}
+
+.test-empty p {
+  max-width: 380px;
+  margin: 0;
+  font-size: 12.6px;
+  line-height: 1.6;
+}
+
+.test-empty.is-pending {
+  border-color: rgba(251, 191, 36, 0.24);
+}
+
+.test-empty.is-pending .empty-icon {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+
+.test-empty.is-error {
+  border-color: rgba(251, 113, 133, 0.28);
+}
+
+.test-empty.is-error .empty-icon {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: rgba(251, 113, 133, 0.2);
+}
+
+.test-empty.is-error strong {
+  color: var(--red);
+}
+
+#testOutputWrap {
+  display: grid;
+  gap: 12px;
+}
+
+.test-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.test-output {
+  min-height: 220px;
+  max-height: 620px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: var(--text);
+  background: rgba(8, 10, 16, 0.56);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-family: var(--font);
+  font-size: 14.4px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.test-reasoning {
+  padding: 12px 14px;
+  background: rgba(139, 156, 255, 0.045);
+  border: 1px solid rgba(139, 156, 255, 0.14);
+  border-radius: 10px;
+}
+
+.test-reasoning h4 {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.test-reasoning pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 12.6px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.test-error {
+  padding: 12px 14px;
+  color: var(--red);
+  background: var(--red-soft);
+  border: 1px solid rgba(251, 113, 133, 0.18);
+  border-radius: 10px;
+  font-size: 12.6px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.test-raw {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.test-raw summary {
+  color: var(--faint);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.test-raw pre {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 12px;
+  overflow: auto;
+  color: #b9c4db;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.head-state.is-warn {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+
+.head-state.is-error {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: rgba(251, 113, 133, 0.2);
+}
+
+@media (max-width: 980px) {
+  .test-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .test-output-card {
+    position: static;
+  }
+}
+
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 1180px) {

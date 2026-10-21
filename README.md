@@ -322,6 +322,21 @@ npm start
 
 添加后会自动出现在模型选择器里；重新选择默认模型并「更新并应用」即可。
 
+---
+
+## 模型测试
+
+控制台「测试」页可以直接对指定模型发一轮对话：
+
+1. 进入「测试」，点「刷新模型列表」；
+2. 在可搜索下拉框里选择模型；
+3. 填写输入内容（可选系统提示词、最大输出 Tokens、Temperature）；
+4. 点「发送测试」，右侧会显示上游输出、渠道、账号、首字延迟、耗时和 Tokens。
+
+测试直接调用渠道账号，**不需要先启动网关**；每次测试都会写入请求日志，并消耗对应账号的额度。
+
+---
+
 也可以用 `POST /admin/channels/create`：
 
 ```bash
@@ -382,6 +397,7 @@ curl http://127.0.0.1:8787/admin/channels/create ^
 | GET | `/v1/models` | 聚合所有启用渠道的模型 |
 | GET | `/healthz` | 健康检查（含渠道列表） |
 | GET | `/admin/status` | 控制台状态、默认渠道、全部渠道与统计 |
+| POST | `/admin/test-chat` | 对指定模型执行一次测试对话（不需要先启动网关） |
 | GET | `/admin/channels` | 渠道详情、可选类型与预设 |
 | POST | `/admin/channels/create` | 新建渠道 |
 | POST | `/admin/channels/update` | 修改渠道（label / enabled / baseUrl / key / 模型清单） |

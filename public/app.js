@@ -41,7 +41,10 @@ const state = {
   poolFilter: 'all',
   editSubmit: null,
   openChannels: new Set(),
-  channelPoolSignature: ''
+  channelPoolSignature: '',
+  testModelSelect: null,
+  testBusy: false,
+  lastTestOutput: ''
 };
 
 /* ========================================================================== */
@@ -331,7 +334,7 @@ function poolPassesFilter(account) {
 /* router                                                                     */
 /* ========================================================================== */
 
-const VIEWS = ['overview', 'channels', 'connect', 'accounts', 'logs', 'settings'];
+const VIEWS = ['overview', 'channels', 'connect', 'accounts', 'test', 'logs', 'settings'];
 
 function setView(name, { push = true } = {}) {
   const view = VIEWS.includes(name) ? name : 'overview';
@@ -354,6 +357,7 @@ function setView(name, { push = true } = {}) {
   if (heading) heading.setAttribute('tabindex', '-1');
 
   if (view === 'logs') loadLogs();
+  if (view === 'test' && !state.models.length && isConfigured()) loadModels();
 }
 
 /* ========================================================================== */
@@ -694,6 +698,7 @@ function renderModels() {
   renderModelChips();
   updateModelDescription();
   updateContextOptions();
+  renderTestModels();
 }
 
 function renderModelChips() {
@@ -822,6 +827,212 @@ async function loadModels(force = false) {
   } finally {
     setBusy(button, false);
     button.disabled = !isConfigured();
+  }
+}
+
+function renderTestModels() {
+  const select = state.testModelSelect;
+  if (!select) return;
+
+  const count = state.models.length;
+  if ($('testModelCount')) {
+    $('testModelCount').textContent = `${count} 个模型`;
+  }
+
+  if (!count) {
+    select.setOptions([]);
+    select.setDisabled(true);
+    if ($('testModelHint')) $('testModelHint').textContent = '没有可用模型，请先连接渠道或刷新模型列表。';
+    if ($('runTestBtn')) $('runTestBtn').disabled = true;
+    return;
+  }
+
+  select.setOptions(
+    state.models.map((model) => ({
+      value: model.id,
+      label: model.id,
+      description: [
+        model.channel_label || model.channel || '',
+        model.name || '',
+        model.context_length || model.context_window
+          ? `上下文 ${formatContext(model.context_length || model.context_window)}`
+          : ''
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      searchText: `${model.id} ${model.name || ''} ${model.upstream_id || ''} ${model.channel || ''}`
+    }))
+  );
+
+  if (!select.getValue() || !select.hasValue(select.getValue())) {
+    const preferred = state.status?.defaultModel;
+    select.setValue(
+      preferred && select.hasValue(preferred) ? preferred : state.models[0].id
+    );
+  }
+  select.setDisabled(false);
+  if ($('runTestBtn')) $('runTestBtn').disabled = state.testBusy;
+  updateTestModelHint();
+}
+
+function updateTestModelHint() {
+  const node = $('testModelHint');
+  if (!node) return;
+  const id = state.testModelSelect?.getValue() || '';
+  const model = state.models.find((item) => item.id === id);
+  if (!model) {
+    node.textContent = '请选择一个模型';
+    return;
+  }
+  const context = model.context_length || model.context_window || model.max_input_tokens;
+  node.textContent = [
+    model.channel_label || model.channel || '',
+    `上游 ${model.upstream_id || model.id}`,
+    context ? `上下文 ${formatContext(context)}` : ''
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function setTestStatus(text, kind = '') {
+  const node = $('testStatus');
+  if (!node) return;
+  node.textContent = text;
+  node.classList.toggle('is-on', kind === 'ok');
+  node.classList.toggle('is-warn', kind === 'warn');
+  node.classList.toggle('is-error', kind === 'error');
+}
+
+function setTestEmpty(title, text, kind = '') {
+  const empty = $('testOutputEmpty');
+  if (!empty) return;
+  empty.hidden = false;
+  empty.className = `test-empty${kind ? ` is-${kind}` : ''}`;
+  if ($('testEmptyTitle')) $('testEmptyTitle').textContent = title;
+  if ($('testEmptyText')) $('testEmptyText').textContent = text;
+  if ($('testOutputWrap')) $('testOutputWrap').hidden = true;
+}
+
+function renderTestResult(data, wallMs) {
+  const content = String(data.content || '').trim();
+  const output = content || (data.toolCalls ? '模型返回了工具调用，见下方原始响应。' : '（无文本输出）');
+
+  state.lastTestOutput = output;
+  if ($('testOutputWrap')) $('testOutputWrap').hidden = false;
+  if ($('testOutputEmpty')) $('testOutputEmpty').hidden = true;
+  if ($('testError')) {
+    $('testError').hidden = true;
+    $('testError').textContent = '';
+  }
+  if ($('testOutput')) $('testOutput').textContent = output;
+  if ($('testOutputHint')) {
+    $('testOutputHint').textContent = `${data.channelLabel || data.channel || '渠道'} · ${
+      data.account || '账号'
+    } · 完成于 ${new Date().toLocaleTimeString('zh-CN')}`;
+  }
+
+  const meta = $('testMeta');
+  if (meta) {
+    clear(meta);
+    const usage = data.usage || {};
+    const chips = [
+      data.channelLabel || data.channel,
+      data.account,
+      data.upstreamModel && data.upstreamModel !== data.requestedModel
+        ? `上游 ${data.upstreamModel}`
+        : '',
+      data.ttfbMs != null ? `首字 ${data.ttfbMs}ms` : '',
+      data.durationMs != null ? `耗时 ${data.durationMs}ms` : '',
+      usage.prompt_tokens != null || usage.completion_tokens != null
+        ? `Tokens ${usage.prompt_tokens ?? '?'}/${usage.completion_tokens ?? '?'}`
+        : '',
+      data.finishReason ? `finish ${data.finishReason}` : ''
+    ].filter(Boolean);
+    for (const chip of chips) meta.appendChild(el('span', 'chip', chip));
+  }
+
+  const reasoningWrap = $('testReasoningWrap');
+  if (reasoningWrap) {
+    const reasoning = String(data.reasoning || '').trim();
+    reasoningWrap.hidden = !reasoning;
+    if (reasoning && $('testReasoning')) $('testReasoning').textContent = reasoning;
+  }
+
+  if ($('testRaw')) {
+    $('testRaw').textContent = JSON.stringify(data.completion || data, null, 2);
+  }
+  if ($('copyTestOutputBtn')) $('copyTestOutputBtn').disabled = false;
+
+  const status = data.durationMs != null ? `成功 · ${data.durationMs}ms` : '成功';
+  setTestStatus(status, 'ok');
+  setMsg($('testMsg'), `测试完成（${Math.round(wallMs)}ms）`, 'ok');
+}
+
+function renderTestError(message) {
+  state.lastTestOutput = '';
+  if ($('copyTestOutputBtn')) $('copyTestOutputBtn').disabled = true;
+  setTestEmpty('测试失败', message, 'error');
+  if ($('testOutputHint')) $('testOutputHint').textContent = '请求没有完成';
+  setTestStatus('失败', 'error');
+  setMsg($('testMsg'), message, 'error');
+}
+
+async function runModelTest() {
+  if (state.testBusy) return;
+  const model = state.testModelSelect?.getValue() || '';
+  const input = $('testInput')?.value.trim() || '';
+  if (!model) {
+    toast('请先选择测试模型', 'warn');
+    return;
+  }
+  if (!input) {
+    toast('请输入要发送的内容', 'warn');
+    return;
+  }
+
+  const maxTokens = Number($('testMaxTokens')?.value);
+  const temperatureRaw = $('testTemperature')?.value.trim() || '';
+  const temperature = temperatureRaw === '' ? undefined : Number(temperatureRaw);
+  const system = $('testSystem')?.value.trim() || '';
+
+  state.testBusy = true;
+  const button = $('runTestBtn');
+  setBusy(button, true);
+  setTestStatus('请求中', 'warn');
+  setTestEmpty('正在测试…', `等待 ${model} 返回，复杂模型可能需要几秒。`, 'pending');
+  setMsg($('testMsg'), '正在调用上游…', 'warn');
+  if ($('testOutputHint')) $('testOutputHint').textContent = '等待上游返回';
+
+  const started = performance.now();
+  try {
+    const data = await api(
+      '/admin/test-chat',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          model,
+          input,
+          system,
+          maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : undefined,
+          temperature:
+            Number.isFinite(temperature) && temperature >= 0 && temperature <= 2
+              ? temperature
+              : undefined
+        }),
+        signal: AbortSignal.timeout(180000)
+      }
+    );
+    renderTestResult(data, performance.now() - started);
+    await refreshStatus({ silent: true });
+    await loadLogs();
+  } catch (err) {
+    renderTestError(err.message);
+    toast(`测试失败：${err.message}`, 'error');
+  } finally {
+    state.testBusy = false;
+    setBusy(button, false);
+    if (button) button.disabled = !state.models.length;
+    if ($('runTestBtn')) $('runTestBtn').disabled = !state.models.length;
   }
 }
 
@@ -3429,6 +3640,21 @@ function bind() {
     }
   });
 
+  // -- model playground
+  $('refreshTestModelsBtn').addEventListener('click', () => loadModels(true));
+  $('runTestBtn').addEventListener('click', runModelTest);
+  $('testInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      runModelTest();
+    }
+  });
+  $('copyTestOutputBtn').addEventListener('click', async () => {
+    if (!state.lastTestOutput) return;
+    const ok = await copyText(state.lastTestOutput);
+    toast(ok ? '输出已复制' : '复制失败', ok ? 'success' : 'error');
+  });
+
   // -- gateway
   $('genKeyBtn').addEventListener('click', () => generateKey());
   $('regenBtn').addEventListener('click', () => generateKey());
@@ -3485,6 +3711,12 @@ function initSelects() {
     }
   });
   state.contextSelect.setDisabled(true);
+
+  state.testModelSelect = new CustomSelect($('testModelSelect'), {
+    searchable: true,
+    onChange: () => updateTestModelHint()
+  });
+  state.testModelSelect.setDisabled(true);
 }
 
 async function init() {

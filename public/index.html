@@ -56,6 +56,13 @@
             <span>代理池</span>
             <em class="nav-count" id="navPoolCount">0</em>
           </button>
+          <button class="nav-item" type="button" data-view="test">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 3h6" /><path d="M10 3v6.5L5.6 17a2.4 2.4 0 0 0 2.1 3.5h8.6a2.4 2.4 0 0 0 2.1-3.5L14 9.5V3" />
+              <path d="M7.5 15h9" />
+            </svg>
+            <span>测试</span>
+          </button>
           <button class="nav-item" type="button" data-view="logs">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
@@ -641,6 +648,112 @@
               <span id="expiryLine">—</span>
             </div>
           </section>
+        </section>
+
+        <!-- ============================ 测试 ============================ -->
+        <section class="view" id="view-test" data-view="test" hidden>
+          <header class="view-head">
+            <div>
+              <span class="eyebrow">Model playground</span>
+              <h2>测试</h2>
+              <p>选择模型，填写输入，直接查看上游返回</p>
+            </div>
+            <div class="view-actions">
+              <span class="head-state" id="testModelCount">0 个模型</span>
+              <button class="ghost" id="refreshTestModelsBtn" type="button">刷新模型列表</button>
+            </div>
+          </header>
+
+          <div class="guide-bar">
+            <span class="guide-icon" aria-hidden="true">i</span>
+            <p>测试直接调用渠道账号，不需要先启动网关；每次测试都会写入请求日志，并消耗对应账号的额度。</p>
+          </div>
+
+          <div class="test-layout">
+            <section class="card test-form">
+              <header class="card-head compact">
+                <div class="card-title">
+                  <h3>测试请求</h3>
+                  <p>模型列表来自当前所有已启用渠道</p>
+                </div>
+                <span class="head-state" id="testStatus">待测试</span>
+              </header>
+
+              <div class="field">
+                <label class="field-label">测试模型</label>
+                <div id="testModelSelect" class="cselect" data-placeholder="刷新模型列表后选择"></div>
+                <div class="field-hint" id="testModelHint">正在读取模型列表…</div>
+              </div>
+
+              <details class="advanced">
+                <summary>高级参数</summary>
+                <div class="advanced-grid">
+                  <label class="is-wide">
+                    系统提示词（可选）
+                    <textarea id="testSystem" spellcheck="false" placeholder="例如：你是一个简洁的助手，只回答用户的问题。"></textarea>
+                  </label>
+                  <label>
+                    最大输出 Tokens
+                    <input id="testMaxTokens" type="number" min="1" max="8192" step="1" value="1024" />
+                  </label>
+                  <label>
+                    Temperature
+                    <input id="testTemperature" type="number" min="0" max="2" step="0.1" value="0.7" />
+                  </label>
+                </div>
+              </details>
+
+              <label class="field-label" for="testInput">输入内容</label>
+              <textarea
+                id="testInput"
+                class="test-input"
+                spellcheck="false"
+                placeholder="输入要发送给模型的内容，Ctrl+Enter 快速发送"
+              >你好，请用一句话介绍你自己。</textarea>
+
+              <div class="test-actions">
+                <button class="btn primary" id="runTestBtn" type="button">
+                  <span class="btn-label">发送测试</span>
+                  <span class="spinner" aria-hidden="true"></span>
+                </button>
+                <span class="inline-msg" id="testMsg" role="status"></span>
+              </div>
+            </section>
+
+            <section class="card test-output-card">
+              <header class="card-head compact">
+                <div class="card-title">
+                  <h3>输出</h3>
+                  <p id="testOutputHint">等待测试请求</p>
+                </div>
+                <button class="ghost mini" id="copyTestOutputBtn" type="button" disabled>复制输出</button>
+              </header>
+
+              <div class="test-empty" id="testOutputEmpty">
+                <div class="empty-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 6h16M4 12h10M4 18h7" /><path d="M16 15l3 3-3 3" />
+                  </svg>
+                </div>
+                <strong id="testEmptyTitle">还没有测试结果</strong>
+                <p id="testEmptyText">选择模型，填写输入，点击「发送测试」。</p>
+              </div>
+
+              <div id="testOutputWrap" hidden>
+                <div class="test-meta" id="testMeta"></div>
+                <div class="test-reasoning" id="testReasoningWrap" hidden>
+                  <h4>推理过程</h4>
+                  <pre id="testReasoning"></pre>
+                </div>
+                <pre class="test-output" id="testOutput"></pre>
+                <div class="test-error" id="testError" hidden></div>
+                <details class="test-raw">
+                  <summary>原始响应</summary>
+                  <pre id="testRaw"></pre>
+                </details>
+              </div>
+            </section>
+          </div>
         </section>
 
         <!-- ============================ 日志 ============================ -->

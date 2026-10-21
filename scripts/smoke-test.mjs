@@ -222,6 +222,18 @@ try {
     assert.ok(ids.includes('my-alias'), 'global alias missing');
   });
 
+  await check('admin test-chat runs a model without starting the proxy', async () => {
+    const { status, body } = await api('/admin/test-chat', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'mock-model', input: 'hello', maxTokens: 32 })
+    });
+    assert.equal(status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.channel, 'mock');
+    assert.match(body.content, /echo:mock-model ok/);
+    assert.equal(body.usage.prompt_tokens, 7);
+  });
+
   await check('channel test endpoint validates the upstream', async () => {
     const { status, body } = await api('/admin/channels/test', {
       method: 'POST',

@@ -284,12 +284,13 @@ try {
     status: document.getElementById('statusText')?.textContent || ''
   }))()`);
 
-  await check('shell renders six routed views with overview active', async () => {
+  await check('shell renders seven routed views with overview active', async () => {
     assert.deepEqual(shell.navItems, [
       'overview',
       'channels',
       'connect',
       'accounts',
+      'test',
       'logs',
       'settings'
     ]);
@@ -782,6 +783,57 @@ try {
       return true;
     })()`);
     await sleep(200);
+  });
+
+  /* ---------------------------------------------------------- playground */
+
+  await check('model playground fetches models and shows selected model output', async () => {
+    await goto('test');
+    await sleep(900);
+
+    const initial = await read(`(() => ({
+      count: document.getElementById('testModelCount')?.textContent || '',
+      hasSelect: Boolean(document.getElementById('testModelSelect'))
+    }))()`);
+    assert.equal(initial.hasSelect, true);
+    assert.match(initial.count, /\d+ 个模型/);
+
+    await read(`document.querySelector('#testModelSelect .cselect-trigger').click()`);
+    await sleep(250);
+    const chosen = await read(`(() => {
+      const row = [...document.querySelectorAll('#testModelSelect .cselect-option')]
+        .find((item) => item.textContent.includes('demo/demo-model') || item.textContent.includes('demo-model'));
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`);
+    assert.equal(chosen, true, 'demo model was not in the test picker');
+
+    const selected = await read(`document.querySelector('#testModelSelect .cselect-value')?.textContent || ''`);
+    assert.match(selected, /demo/);
+
+    await read(`(() => {
+      document.getElementById('testInput').value = 'hello from ui';
+      document.getElementById('runTestBtn').click();
+      return true;
+    })()`);
+
+    let status = '';
+    for (let i = 0; i < 30; i += 1) {
+      await sleep(300);
+      status = await read(`document.getElementById('testStatus')?.textContent || ''`);
+      if (/成功|失败/.test(status)) break;
+    }
+    assert.match(status, /成功/);
+
+    const result = await read(`(() => ({
+      output: document.getElementById('testOutput')?.textContent || '',
+      meta: document.getElementById('testMeta')?.textContent || '',
+      errors: window.__buddyErrors || []
+    }))()`);
+    assert.match(result.output, /hello from mock/);
+    assert.match(result.meta, /demo/i);
+    assert.deepEqual(result.errors, []);
   });
 
   /* -------------------------------------------------------- settings */
