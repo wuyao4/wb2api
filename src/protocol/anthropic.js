@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { readSSE } from './openai.js';
+import { readSSE } from '../core/sse.js';
 
-async function waitForDrain(res) {
+function waitForDrain(res) {
   if (!res.writableNeedDrain) return;
-  await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const cleanup = () => {
       res.off('drain', onDrain);
       res.off('close', onClose);
@@ -263,12 +263,12 @@ export async function relayAnthropicStream({ body, res, requestedModel, onUsage,
     const delta = choice?.delta;
     if (!delta) continue;
 
-    if (delta.reasoning_content) {
+    if (delta.reasoning_content || delta.reasoning) {
       if (!open || open.type !== 'thinking') startBlock('thinking', { type: 'thinking', thinking: '' });
       send('content_block_delta', {
         type: 'content_block_delta',
         index: open.index,
-        delta: { type: 'thinking_delta', thinking: delta.reasoning_content }
+        delta: { type: 'thinking_delta', thinking: delta.reasoning_content || delta.reasoning }
       });
     }
 

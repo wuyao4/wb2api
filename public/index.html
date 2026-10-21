@@ -2,65 +2,460 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>WorkBuddy2API · 控制台</title>
-    <meta name="description" content="把 WorkBuddy 变成你自己的 OpenAI / Anthropic 兼容 API" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Buddy2API · 多渠道控制台</title>
+    <meta name="description" content="把 WorkBuddy、账号渠道与任意 OpenAI 兼容上游，统一变成你自己的 OpenAI / Anthropic 兼容 API" />
+    <meta name="color-scheme" content="dark" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 7h6a3 3 0 0 1 3 3v4a3 3 0 0 0 3 3h4" />
-            <path d="M17 14l3 3-3 3" />
-            <circle cx="4" cy="7" r="1.6" fill="currentColor" stroke="none" />
-          </svg>
-        </div>
-        <div class="brand-text">
-          <h1>WorkBuddy<span>2API</span></h1>
-          <p>OpenAI · Anthropic 兼容反代</p>
-        </div>
-      </div>
-      <div class="top-actions">
-        <div class="status-pill" id="statusPill" data-state="idle">
-          <span class="pill-dot"></span>
-          <span id="statusText">未配置</span>
-        </div>
-      </div>
-    </header>
+    <a class="skip-link" href="#main">跳到主内容</a>
 
-    <main class="shell">
-      <section class="hero">
-        <h2>把 WorkBuddy 变成你自己的 API</h2>
-        <p>连接账号，启动兼容 OpenAI / Anthropic 的本地网关。</p>
-      </section>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 7h6a3 3 0 0 1 3 3v4a3 3 0 0 0 3 3h4" />
+              <path d="M17 14l3 3-3 3" />
+              <circle cx="4" cy="7" r="1.6" fill="currentColor" stroke="none" />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <h1>Buddy<span>2API</span></h1>
+            <p>多渠道网关</p>
+          </div>
+        </div>
 
-      <div class="layout">
-        <div class="column">
-          <section class="card step-card" id="cardCredentials">
-            <header class="card-head">
-              <span class="step-num">01</span>
+        <nav class="nav" id="nav" aria-label="主导航">
+          <button class="nav-item" type="button" data-view="overview" aria-current="page">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" />
+              <rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" />
+            </svg>
+            <span>概览</span>
+          </button>
+          <button class="nav-item" type="button" data-view="channels">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h10" />
+            </svg>
+            <span>渠道</span>
+            <em class="nav-count" id="navChannelCount">0</em>
+          </button>
+          <button class="nav-item" type="button" data-view="connect">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 15l6-6" /><path d="M11 6l1-1a4 4 0 0 1 6 6l-1 1" /><path d="M13 18l-1 1a4 4 0 0 1-6-6l1-1" />
+            </svg>
+            <span>连接</span>
+          </button>
+          <button class="nav-item" type="button" data-view="accounts">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="8" r="3.4" /><path d="M5 20a7 7 0 0 1 14 0" />
+            </svg>
+            <span>账号</span>
+          </button>
+          <button class="nav-item" type="button" data-view="logs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+              <path d="M13 4v6h6" /><path d="M8 14h8M8 17h5" />
+            </svg>
+            <span>日志</span>
+          </button>
+          <button class="nav-item" type="button" data-view="settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+            </svg>
+            <span>设置</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <button class="status-pill" id="statusPill" data-state="idle" type="button" title="查看运行状态">
+            <span class="pill-dot"></span>
+            <span id="statusText">未配置</span>
+          </button>
+          <div class="sidebar-meta" id="sidebarMeta">本机运行 · 凭据仅存本地</div>
+        </div>
+      </aside>
+
+      <main class="main" id="main">
+        <!-- ============================ 概览 ============================ -->
+        <section class="view" id="view-overview" data-view="overview">
+          <header class="view-head">
+            <div>
+              <h2>概览</h2>
+              <p id="overviewSubtitle">连接渠道，启动本地网关</p>
+            </div>
+            <div class="view-actions">
+              <button class="ghost" id="refreshAllBtn" type="button">刷新</button>
+            </div>
+          </header>
+
+          <div class="overview-grid">
+            <section class="card panel-start" id="cardStart">
+              <header class="card-head">
+                <div class="card-title">
+                  <h3>启动网关</h3>
+                  <p>选择默认模型，暴露 OpenAI / Anthropic 兼容端点</p>
+                </div>
+                <span class="head-state" id="startState">等待凭据</span>
+              </header>
+
+              <div class="field">
+                <label class="field-label" for="modelSelect">默认模型</label>
+                <div class="field-row">
+                  <div id="modelSelect" class="cselect" data-placeholder="请先连接渠道"></div>
+                  <button class="ghost mini" id="modelsBtn" type="button" disabled>刷新</button>
+                </div>
+                <div class="field-hint" id="modelDesc">连接渠道后加载模型列表</div>
+                <div class="chip-row" id="modelChips"></div>
+              </div>
+
+              <div class="field">
+                <label class="field-label" for="contextSelect">上下文窗口</label>
+                <div id="contextSelect" class="cselect" data-placeholder="选择模型后可用"></div>
+                <div class="field-hint" id="contextDesc">向客户端声明的上限，网关不会截断请求</div>
+              </div>
+
+              <div class="field">
+                <label class="field-label" for="keyInput">网关 API Key</label>
+                <div class="field-row">
+                  <input id="keyInput" spellcheck="false" autocomplete="off" placeholder="留空则在启动时自动生成" />
+                  <button class="ghost mini" id="genKeyBtn" type="button">生成</button>
+                </div>
+              </div>
+
+              <button class="btn primary btn-block" id="startBtn" type="button" disabled>
+                <span class="btn-label">启动网关</span>
+                <span class="spinner" aria-hidden="true"></span>
+              </button>
+              <div class="inline-msg" id="startMsg" role="status"></div>
+            </section>
+
+            <section class="card panel-output" id="cardOutput">
+              <div class="output-empty" id="outputEmpty">
+                <div class="empty-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                    <rect x="4" y="10" width="16" height="10" rx="3" />
+                    <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                    <circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none" />
+                  </svg>
+                </div>
+                <h3>网关未启动</h3>
+                <p>完成连接后点击「启动网关」，这里会生成专属地址与密钥。</p>
+              </div>
+
+              <div class="output-live" id="outputLive" hidden>
+                <header class="output-head">
+                  <div class="live-title">
+                    <span class="live-dot" aria-hidden="true"></span>
+                    <div>
+                      <h3>网关运行中</h3>
+                      <p id="readyMeta">OpenAI / Anthropic 兼容端点</p>
+                    </div>
+                  </div>
+                  <button class="ghost danger" id="stopBtn" type="button">停止</button>
+                </header>
+
+                <div class="endpoint">
+                  <div class="endpoint-meta">
+                    <span>BASE URL</span>
+                    <button class="ghost mini" type="button" data-copy="base">复制</button>
+                  </div>
+                  <code id="baseUrlText">—</code>
+                </div>
+
+                <div class="endpoint">
+                  <div class="endpoint-meta">
+                    <span>API KEY</span>
+                    <span class="endpoint-actions">
+                      <button class="ghost mini" id="regenBtn" type="button">重新生成</button>
+                      <button class="ghost mini" type="button" data-copy="key">复制</button>
+                    </span>
+                  </div>
+                  <code id="apiKeyText">—</code>
+                </div>
+
+                <div class="compat-row">
+                  <span class="tag">OpenAI</span>
+                  <span class="tag">Anthropic</span>
+                  <span class="tag">Streaming</span>
+                  <span class="tag">Tools</span>
+                </div>
+
+                <details class="snippet">
+                  <summary>调用示例</summary>
+                  <pre id="snippetText"></pre>
+                  <button class="ghost mini" id="copySnippet" type="button">复制示例</button>
+                </details>
+              </div>
+            </section>
+          </div>
+
+          <div class="stat-grid">
+            <div class="stat">
+              <span>请求数</span>
+              <strong id="statRequests">0</strong>
+              <em id="statErrors">—</em>
+            </div>
+            <div class="stat">
+              <span>输入 Tokens</span>
+              <strong id="statPrompt">0</strong>
+            </div>
+            <div class="stat">
+              <span>输出 Tokens</span>
+              <strong id="statCompletion">0</strong>
+            </div>
+            <div class="stat">
+              <span>运行时长</span>
+              <strong id="statUptime">—</strong>
+            </div>
+            <div class="stat">
+              <span>平均首字</span>
+              <strong id="statTtfb">—</strong>
+            </div>
+          </div>
+
+          <section class="card">
+            <header class="card-head compact">
               <div class="card-title">
-                <h3>连接 WorkBuddy</h3>
-                <p>访问令牌 / 刷新令牌均可，自动识别</p>
+                <h3>渠道状态</h3>
+                <p id="healthMeta">—</p>
+              </div>
+              <button class="ghost mini" type="button" data-goto="channels">管理渠道</button>
+            </header>
+            <div class="health-grid" id="healthGrid"></div>
+          </section>
+
+          <section class="card">
+            <header class="card-head compact">
+              <div class="card-title">
+                <h3>最近请求</h3>
+                <p id="recentMeta">暂无请求</p>
+              </div>
+              <button class="ghost mini" type="button" data-goto="logs">查看全部</button>
+            </header>
+            <div class="log-list" id="recentLogList">
+              <div class="empty-state">启动网关后，这里显示调用记录</div>
+            </div>
+          </section>
+        </section>
+
+        <!-- ============================ 渠道 ============================ -->
+        <section class="view" id="view-channels" data-view="channels" hidden>
+          <header class="view-head">
+            <div>
+              <h2>渠道</h2>
+              <p id="channelsSubtitle">已连接的上游渠道与账号</p>
+            </div>
+            <div class="view-actions">
+              <button class="ghost" type="button" data-goto="connect">连接新渠道</button>
+            </div>
+          </header>
+
+          <div class="toolbar">
+            <div class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+              </svg>
+              <input id="channelSearch" type="search" placeholder="搜索渠道或模型" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="filter-chips" id="channelFilters" role="group" aria-label="按状态筛选">
+              <button class="chip is-active" type="button" data-filter="all">全部</button>
+              <button class="chip" type="button" data-filter="ready">已就绪</button>
+              <button class="chip" type="button" data-filter="pending">待配置</button>
+              <button class="chip" type="button" data-filter="oauth">账号渠道</button>
+            </div>
+          </div>
+
+          <div class="channel-list" id="channelList">
+            <div class="skeleton-list">
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+            </div>
+          </div>
+
+          <details class="card card-quiet" id="channelAdd">
+            <summary>
+              <span>自定义渠道</span>
+              <em>手动填写 Base URL</em>
+            </summary>
+            <div class="channel-add-body">
+              <label class="channel-field">
+                渠道 ID
+                <input id="channelIdInput" spellcheck="false" autocomplete="off" placeholder="例如 my-gateway" />
+              </label>
+              <label class="channel-field">
+                显示名称
+                <input id="channelLabelInput" spellcheck="false" autocomplete="off" placeholder="例如 我的网关" />
+              </label>
+              <label class="channel-field is-wide">
+                Base URL
+                <input id="channelBaseInput" spellcheck="false" autocomplete="off" placeholder="https://api.example.com/v1" />
+              </label>
+              <label class="channel-field is-wide">
+                API Key
+                <input id="channelKeyInput" type="password" autocomplete="off" placeholder="可留空（本机 / 免密渠道）" />
+              </label>
+              <label class="channel-field is-wide">
+                静态模型清单（可选）
+                <textarea id="channelModelsInput" spellcheck="false" placeholder="模型列表接口不可用时使用，逗号或换行分隔"></textarea>
+              </label>
+              <div class="channel-add-actions">
+                <button class="btn secondary" id="createChannelBtn" type="button">添加渠道</button>
+                <span class="inline-msg" id="channelMsg" role="status"></span>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <!-- ============================ 连接 ============================ -->
+        <section class="view" id="view-connect" data-view="connect" hidden>
+          <header class="view-head">
+            <div>
+              <h2>连接</h2>
+              <p id="connectSubtitle">选择一个服务商，按提示完成授权</p>
+            </div>
+            <div class="view-actions">
+              <span class="head-state" id="connectState">待选择</span>
+            </div>
+          </header>
+
+          <div class="connect-layout">
+            <div class="connect-browser">
+              <div class="toolbar">
+                <div class="search">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+                  </svg>
+                  <input id="connectSearch" type="search" placeholder="搜索服务商" autocomplete="off" spellcheck="false" />
+                </div>
+              </div>
+
+              <div class="connect-groups" id="connectPresets"></div>
+            </div>
+
+            <div class="card connect-panel" id="connectPanel" hidden>
+              <div class="connect-head">
+                <div>
+                  <strong id="connectName">—</strong>
+                  <span class="connect-strategy" id="connectStrategy">—</span>
+                </div>
+              </div>
+              <p class="connect-note" id="connectNote"></p>
+              <div class="connect-facts" id="connectFacts"></div>
+
+              <div class="connect-step" id="connectStepOauth" hidden>
+                <button class="btn primary btn-block" id="oauthStartBtn" type="button">
+                  <span class="btn-label">一键授权</span>
+                  <span class="spinner" aria-hidden="true"></span>
+                </button>
+                <div class="field-hint" id="oauthHint">
+                  会打开官方授权页；登录后自动写回凭据，无需复制。
+                </div>
+
+                <div class="connect-device" id="connectDevice" hidden>
+                  <span>设备码</span>
+                  <code id="connectUserCode">—</code>
+                  <button class="ghost mini" id="copyUserCodeBtn" type="button">复制</button>
+                </div>
+
+                <div class="connect-sms" id="connectSms" hidden>
+                  <label class="channel-field">
+                    手机号
+                    <input id="connectPhoneInput" inputmode="tel" autocomplete="tel" placeholder="用于接收短信验证码" />
+                  </label>
+                  <div class="field-row">
+                    <button class="ghost" id="sendSmsBtn" type="button">发送验证码</button>
+                    <span class="inline-msg" id="smsMsg" role="status"></span>
+                  </div>
+                  <label class="channel-field" id="smsCodeField" hidden>
+                    验证码
+                    <span class="field-row">
+                      <input id="connectSmsCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="6 位验证码" />
+                      <button class="btn secondary mini" id="submitSmsBtn" type="button">登录</button>
+                    </span>
+                  </label>
+                </div>
+
+                <div class="connect-qr" id="connectQr" hidden>
+                  <div class="connect-qr-image" id="connectQrImage"></div>
+                  <div class="connect-qr-hint">用微信扫描二维码完成登录</div>
+                </div>
+
+                <div class="connect-oauth-state" id="oauthState" hidden></div>
+              </div>
+
+              <div class="connect-step" id="connectStepKey" hidden>
+                <div class="connect-actions">
+                  <button class="ghost" id="openKeyPageBtn" type="button">打开官方 Key 页面</button>
+                  <button class="ghost" id="detectLocalBtn" type="button" hidden>检测本机服务</button>
+                </div>
+                <label class="channel-field">
+                  API Key
+                  <span class="field-row">
+                    <input id="connectKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴，或读取剪贴板" />
+                    <button class="ghost mini" id="pasteKeyBtn" type="button">读取剪贴板</button>
+                  </span>
+                </label>
+                <label class="check-row">
+                  <input type="checkbox" id="autoCaptureInput" checked />
+                  <span>打开 Key 页面后自动监听剪贴板，复制到 Key 就自动校验</span>
+                </label>
+                <button class="btn secondary btn-block" id="verifyKeyBtn" type="button">
+                  <span class="btn-label">校验并添加</span>
+                  <span class="spinner" aria-hidden="true"></span>
+                </button>
+              </div>
+
+              <div class="connect-step" id="connectStepKeyless" hidden>
+                <button class="btn secondary btn-block" id="addKeylessBtn" type="button">
+                  <span class="btn-label">直接添加</span>
+                  <span class="spinner" aria-hidden="true"></span>
+                </button>
+                <div class="field-hint" id="keylessHint">该渠道无需账号与 Key。</div>
+              </div>
+
+              <div class="connect-result" id="connectResult" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================ 账号 ============================ -->
+        <section class="view" id="view-accounts" data-view="accounts" hidden>
+          <header class="view-head">
+            <div>
+              <h2>账号</h2>
+              <p id="accountsSubtitle">多账号分摊并发，同一会话保持粘滞</p>
+            </div>
+            <div class="view-actions">
+              <button class="ghost mini" id="addAccountBtn" type="button">添加账号</button>
+            </div>
+          </header>
+
+          <section class="card" id="cardCredentials">
+            <header class="card-head">
+              <div class="card-title">
+                <h3>WorkBuddy 账号</h3>
+                <p>浏览器授权，或手动填写 Token</p>
               </div>
               <span class="head-state" id="credState">待填写</span>
             </header>
 
             <div class="login-panel">
-              <button class="btn primary login-btn" id="loginBtn" type="button">
+              <button class="btn primary btn-block login-btn" id="loginBtn" type="button">
                 <span class="btn-label">使用 WorkBuddy 账号登录</span>
                 <span class="spinner" aria-hidden="true"></span>
               </button>
-              <div class="login-hint" id="loginHint">在浏览器完成授权后自动写入 token，无需复制</div>
+              <div class="field-hint" id="loginHint">在浏览器完成授权后自动写入 token，无需复制</div>
               <div class="login-feedback" id="loginFeedback" hidden></div>
               <div class="login-account" id="loginAccount" hidden></div>
             </div>
 
             <details class="manual-token" id="manualToken">
-              <summary>手动填写 Token（可选）</summary>
+              <summary>手动填写 Token</summary>
               <div class="manual-body">
                 <label class="field-label" for="tokenInput">WorkBuddy Token</label>
                 <div class="token-wrap">
@@ -77,12 +472,12 @@
                   </div>
                 </div>
                 <div class="field-hint" id="tokenHint">
-                  支持 access token、refresh token、请求头文本或 JSON，服务端只从中提取凭据。
+                  支持 access token、refresh token、请求头文本或 JSON，服务端只提取凭据。
                 </div>
                 <div class="parsed" id="parsedChips" hidden></div>
 
                 <details class="advanced">
-                  <summary>高级选项（可选）</summary>
+                  <summary>高级选项</summary>
                   <div class="advanced-grid">
                     <label>
                       设备 Token
@@ -104,167 +499,133 @@
             </details>
           </section>
 
-          <section class="card step-card" id="cardStart">
-            <header class="card-head">
-              <span class="step-num">02</span>
-              <div class="card-title">
-                <h3>生成反代与密钥</h3>
-                <p>选择默认模型，启动本地网关</p>
-              </div>
-              <span class="head-state" id="startState">等待凭据</span>
-            </header>
-
-            <label class="field-label" for="modelSelect">默认模型</label>
-            <div class="model-row">
-              <div id="modelSelect" class="cselect" data-placeholder="请先保存凭据"></div>
-              <button class="ghost mini" id="modelsBtn" type="button" disabled>刷新</button>
-            </div>
-            <div class="model-desc" id="modelDesc">保存凭据后加载模型列表</div>
-            <div class="chip-row" id="modelChips"></div>
-
-            <label class="field-label" for="contextSelect">上下文窗口</label>
-            <div class="model-row">
-              <div id="contextSelect" class="cselect" data-placeholder="请先保存凭据"></div>
-            </div>
-            <div class="model-desc" id="contextDesc">用于向客户端声明可用上下文，代理不会截断请求</div>
-
-            <label class="field-label" for="keyInput">API Key</label>
-            <div class="key-row">
-              <input id="keyInput" spellcheck="false" autocomplete="off" placeholder="留空则在启动时自动生成" />
-              <button class="ghost mini" id="genKeyBtn" type="button">生成</button>
-            </div>
-
-            <button class="btn primary" id="startBtn" type="button" disabled>
-              <span class="btn-label">启动反代</span>
-              <span class="spinner" aria-hidden="true"></span>
-            </button>
-            <div class="inline-msg" id="startMsg" role="status"></div>
-          </section>
-        </div>
-
-        <div class="column">
-          <section class="card output-card" id="cardOutput">
-            <div class="output-empty" id="outputEmpty">
-              <div class="lock-badge" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-                  <rect x="4" y="10" width="16" height="10" rx="3" />
-                  <path d="M8 10V7a4 4 0 0 1 8 0v3" />
-                  <circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none" />
-                </svg>
-              </div>
-              <h3>等待启动</h3>
-              <p>保存凭据后点击启动，这里会生成专属反代地址与 API Key。</p>
-            </div>
-
-            <div class="output-live" id="outputLive" hidden>
-              <header class="output-head">
-                <div class="live-title">
-                  <span class="live-dot" aria-hidden="true"></span>
-                  <div>
-                    <h3>反代已就绪</h3>
-                    <p id="readyMeta">OpenAI / Anthropic 兼容端点</p>
-                  </div>
-                </div>
-                <button class="ghost danger" id="stopBtn" type="button">停止</button>
-              </header>
-
-              <div class="endpoint">
-                <div class="endpoint-meta">
-                  <span>BASE URL</span>
-                  <button class="ghost mini" type="button" data-copy="base">复制</button>
-                </div>
-                <code id="baseUrlText">—</code>
-              </div>
-
-              <div class="endpoint">
-                <div class="endpoint-meta">
-                  <span>API KEY</span>
-                  <span class="endpoint-actions">
-                    <button class="ghost mini" id="regenBtn" type="button">重新生成</button>
-                    <button class="ghost mini" type="button" data-copy="key">复制</button>
-                  </span>
-                </div>
-                <code id="apiKeyText">—</code>
-              </div>
-
-              <div class="compat-row">
-                <span class="tag">OpenAI</span>
-                <span class="tag">Anthropic</span>
-                <span class="tag">Streaming</span>
-                <span class="tag">Tools</span>
-              </div>
-
-              <details class="snippet">
-                <summary>查看调用示例</summary>
-                <pre id="snippetText"></pre>
-                <button class="ghost mini" id="copySnippet" type="button">复制示例</button>
-              </details>
-            </div>
-          </section>
-
-          <section class="card accounts-card">
+          <section class="card">
             <header class="card-head compact">
               <div class="card-title">
                 <h3>账号池</h3>
-                <p>多账号分摊并发，同一会话优先保持不变</p>
+                <p id="accountFoot">同一会话会优先使用同一个账号</p>
               </div>
-              <button class="ghost mini" id="addAccountBtn" type="button">添加账号</button>
             </header>
             <div class="account-list" id="accountList">
-              <div class="account-empty">暂无账号</div>
+              <div class="empty-state">暂无账号</div>
             </div>
-            <div class="account-foot" id="accountFoot">同一会话会优先使用同一个账号</div>
           </section>
 
-          <section class="card stats-card">
+          <section class="card">
             <div class="stats-head">
               <div>
-                <h3>运行概览</h3>
+                <h3>当前账号</h3>
                 <p id="userLine">未连接账号</p>
               </div>
               <div class="expiry" id="expiryLine">—</div>
             </div>
-            <div class="stats-grid">
-              <div class="stat">
-                <span>请求数</span>
-                <strong id="statRequests">0</strong>
-              </div>
-              <div class="stat">
-                <span>输入 Tokens</span>
-                <strong id="statPrompt">0</strong>
-              </div>
-              <div class="stat">
-                <span>输出 Tokens</span>
-                <strong id="statCompletion">0</strong>
-              </div>
-              <div class="stat">
-                <span>运行时长</span>
-                <strong id="statUptime">—</strong>
+          </section>
+        </section>
+
+        <!-- ============================ 日志 ============================ -->
+        <section class="view" id="view-logs" data-view="logs" hidden>
+          <header class="view-head">
+            <div>
+              <h2>日志</h2>
+              <p id="logsSubtitle">最近 60 条请求 · 每 4 秒刷新</p>
+            </div>
+            <div class="view-actions">
+              <div class="filter-chips" id="logFilters" role="group" aria-label="按结果筛选">
+                <button class="chip is-active" type="button" data-filter="all">全部</button>
+                <button class="chip" type="button" data-filter="ok">成功</button>
+                <button class="chip" type="button" data-filter="error">失败</button>
               </div>
             </div>
-          </section>
+          </header>
 
-          <section class="card logs-card">
+          <section class="card card-flush">
+            <div class="log-head">
+              <span>时间</span>
+              <span>模型 / 渠道</span>
+              <span>状态</span>
+              <span>耗时</span>
+              <span>Tokens</span>
+            </div>
+            <div class="log-list log-list-full" id="logList">
+              <div class="empty-state">暂无请求，启动网关后在这里查看调用记录</div>
+            </div>
+          </section>
+        </section>
+
+        <!-- ============================ 设置 ============================ -->
+        <section class="view" id="view-settings" data-view="settings" hidden>
+          <header class="view-head">
+            <div>
+              <h2>设置</h2>
+              <p>路由、命名空间与运行信息</p>
+            </div>
+          </header>
+
+          <section class="card">
             <header class="card-head compact">
               <div class="card-title">
-                <h3>实时请求</h3>
-                <p>最近 60 条 · 每 4 秒刷新</p>
+                <h3>模型路由</h3>
+                <p>多渠道时 /v1/models 如何暴露模型 ID</p>
               </div>
-              <span class="refresh-hint"><span></span>LIVE</span>
             </header>
-            <div class="log-list" id="logList">
-              <div class="log-empty">暂无请求，启动后在这里查看调用记录</div>
+            <div class="settings-grid">
+              <label class="channel-field">
+                命名空间
+                <select id="namespaceSelect">
+                  <option value="auto">自动（多渠道时加前缀）</option>
+                  <option value="always">总是加前缀</option>
+                  <option value="never">从不加前缀</option>
+                </select>
+              </label>
+              <label class="channel-field">
+                默认模型
+                <input id="routingDefaultInput" spellcheck="false" placeholder="channel/model" />
+              </label>
+              <label class="check-row is-wide">
+                <input type="checkbox" id="exposeUnprefixedInput" />
+                <span>多渠道时同时暴露唯一的裸模型 ID（兼容旧客户端）</span>
+              </label>
+            </div>
+            <div class="channel-add-actions">
+              <button class="btn secondary" id="saveRoutingBtn" type="button">保存路由设置</button>
+              <span class="inline-msg" id="routingMsg" role="status"></span>
             </div>
           </section>
-        </div>
-      </div>
 
-      <footer class="footer">
-        <span>凭据仅保存在本机 <code>config.json</code></span>
-        <span class="footer-dot"></span>
-        <span>WorkBuddy2API</span>
-      </footer>
-    </main>
+          <section class="card">
+            <header class="card-head compact">
+              <div class="card-title">
+                <h3>运行信息</h3>
+                <p>配置文件与监听地址</p>
+              </div>
+            </header>
+            <dl class="info-list" id="infoList">
+              <div><dt>配置文件</dt><dd id="infoConfig">—</dd></div>
+              <div><dt>监听地址</dt><dd id="infoHost">—</dd></div>
+              <div><dt>鉴权</dt><dd id="infoAuth">—</dd></div>
+              <div><dt>渠道数</dt><dd id="infoChannels">—</dd></div>
+            </dl>
+            <div class="channel-add-actions">
+              <button class="ghost" id="reloadConfigBtn" type="button">重新读取配置</button>
+              <span class="inline-msg" id="reloadMsg" role="status"></span>
+            </div>
+          </section>
+
+          <section class="card card-quiet">
+            <header class="card-head compact">
+              <div class="card-title">
+                <h3>关于</h3>
+                <p>凭据仅保存在本机 config.json</p>
+              </div>
+            </header>
+            <p class="about-text">
+              网关本身只做协议转换：模型能力、额度与计费仍由各渠道账号决定。
+              账号渠道使用其官方授权流程，Key 渠道使用你自己的 API Key。
+            </p>
+          </section>
+        </section>
+      </main>
+    </div>
 
     <div class="toast-stack" id="toastStack" aria-live="polite"></div>
     <script src="/app.js" type="module"></script>

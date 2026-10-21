@@ -15,6 +15,8 @@ export function recordRequest(entry) {
   const record = {
     at: Date.now(),
     kind: entry.kind || 'chat',
+    channel: entry.channel || '',
+    channelLabel: entry.channelLabel || '',
     model: entry.model || '',
     upstreamModel: entry.upstreamModel || '',
     account: entry.account || '',

@@ -34,8 +34,8 @@ export function profileFromToken(token) {
   };
 }
 
-export function generateApiKey() {
-  return `sk-wb-${randomBytes(16).toString('hex')}`;
+export function generateApiKey(prefix = 'sk-wb-') {
+  return `${prefix}${randomBytes(16).toString('hex')}`;
 }
 
 export function maskToken(token) {

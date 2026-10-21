@@ -1,16 +1,22 @@
-import { loadConfig, CONFIG_PATH } from './config.js';
+import { Runtime } from './runtime.js';
+import { startServer } from './server.js';
 
-const config = loadConfig();
+const runtime = new Runtime();
 
-if (!config.upstream.accessToken && !config.upstream.refreshToken) {
+const configured = runtime
+  .enabledChannels()
+  .some((channel) => channel.status?.().configured);
+
+if (!configured) {
   console.warn(
     [
-      '尚未配置 WorkBuddy 凭据。',
-      `打开 http://127.0.0.1:${config.server.port}/ 在控制台粘贴 token 即可开始。`,
-      `（凭据会保存到 ${CONFIG_PATH}）`,
+      '尚未配置任何可用渠道凭据。',
+      `打开 http://127.0.0.1:${runtime.config.server.port}/ 在控制台登录 WorkBuddy，`,
+      '或添加一个 OpenAI 兼容渠道（Kilo / OpenRouter / Ollama …）。',
+      `（配置会保存到 ${runtime.configPath}）`,
       ''
     ].join('\n')
   );
 }
 
-await import('./server.js');
+startServer(runtime);

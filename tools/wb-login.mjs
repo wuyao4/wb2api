@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG_PATH = path.join(ROOT, "config.json");
-const SERVICE = "http://127.0.0.1:8787";
+let SERVICE = "http://127.0.0.1:8787";
 const PLATFORM = "workbuddy-ai";
 const DEFAULT_VERSION = "5.8.4";
 const TIMEOUT_MS = 10 * 60 * 1000;
@@ -18,6 +18,19 @@ function loadConfig() {
     throw new Error(`找不到 ${CONFIG_PATH}，请先运行 npm start 或 npm run setup`);
   }
   return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+}
+
+function workbuddyChannel(config) {
+  return config?.channels?.workbuddy || null;
+}
+
+function primaryAccount(config) {
+  const channel = workbuddyChannel(config);
+  return channel?.accounts?.find((account) => account.id === "primary") || channel?.accounts?.[0] || null;
+}
+
+function channelOptions(config) {
+  return workbuddyChannel(config)?.options || config?.upstream || {};
 }
 
 function openBrowser(url) {
@@ -42,7 +55,7 @@ async function saveTokens(config, accessToken, refreshToken) {
     const response = await fetch(`${SERVICE}/admin/credentials`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source })
+      body: JSON.stringify({ source, channel: workbuddyChannel(config) ? "workbuddy" : undefined })
     });
     const body = await response.json();
     if (response.ok && body.ok) {
@@ -57,9 +70,17 @@ async function saveTokens(config, accessToken, refreshToken) {
     log(`WorkBuddy2API 服务未响应（${error.message}），改为直接写入 config.json。`);
   }
 
-  config.upstream = config.upstream || {};
-  if (accessToken) config.upstream.accessToken = accessToken;
-  if (refreshToken) config.upstream.refreshToken = refreshToken;
+  if (workbuddyChannel(config)) {
+    const account = primaryAccount(config);
+    if (account) {
+      if (accessToken) account.accessToken = accessToken;
+      if (refreshToken) account.refreshToken = refreshToken;
+    }
+  } else {
+    config.upstream = config.upstream || {};
+    if (accessToken) config.upstream.accessToken = accessToken;
+    if (refreshToken) config.upstream.refreshToken = refreshToken;
+  }
   fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
   log("已直接写入 config.json，重启 npm start 后生效。");
   return true;
@@ -67,15 +88,18 @@ async function saveTokens(config, accessToken, refreshToken) {
 
 async function main() {
   const config = loadConfig();
-  const deviceToken = config?.upstream?.deviceToken || '';
+  const options = channelOptions(config);
+  const base = String(options.baseUrl || "https://www.workbuddy.ai").replace(/\/+$/, "");
+  SERVICE = `http://127.0.0.1:${config?.server?.port || 8787}`;
+  const deviceToken = primaryAccount(config)?.deviceToken || options.deviceToken || "";
 
-  const version = config?.upstream?.client?.ideVersion || DEFAULT_VERSION;
+  const version = options?.client?.ideVersion || DEFAULT_VERSION;
   const userAgent =
-    config?.upstream?.client?.userAgent || "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0";
+    options?.client?.userAgent || "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0";
   const headers = {
     "X-No-Authorization": "true",
-    "X-Product": config?.upstream?.product || "SaaS",
-    "X-Domain": config?.upstream?.domain || "www.workbuddy.ai",
+    "X-Product": options?.product || "SaaS",
+    "X-Domain": options?.domain || "www.workbuddy.ai",
     "Accept": "application/json",
     "User-Agent": userAgent
   };
@@ -83,7 +107,7 @@ async function main() {
 
   log("正在创建桌面登录会话…");
   const stateResponse = await fetch(
-    `https://www.workbuddy.ai/v2/plugin/auth/state?platform=${encodeURIComponent(PLATFORM)}&version=${encodeURIComponent(version)}`,
+    `${base}/v2/plugin/auth/state?platform=${encodeURIComponent(PLATFORM)}&version=${encodeURIComponent(version)}`,
     { method: "POST", headers }
   );
   const stateBody = await stateResponse.json();
@@ -104,7 +128,7 @@ async function main() {
     await sleep(2000);
     try {
       const response = await fetch(
-        `https://www.workbuddy.ai/v2/plugin/auth/token?state=${encodeURIComponent(state)}`,
+        `${base}/v2/plugin/auth/token?state=${encodeURIComponent(state)}`,
         { headers }
       );
       const text = await response.text();

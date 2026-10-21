@@ -1,3 +1,7 @@
+import { readSSE, writeWithBackpressure } from '../core/sse.js';
+
+export { readSSE, writeWithBackpressure };
+
 const PASSTHROUGH_FIELDS = [
   'tools',
   'tool_choice',
@@ -19,7 +23,7 @@ const PASSTHROUGH_FIELDS = [
   'user'
 ];
 
-function normalizeMessages(messages, config) {
+function normalizeMessages(messages, promptConfig) {
   const out = Array.isArray(messages) ? messages.map((m) => ({ ...m })) : [];
 
   // OpenAI's newer "developer" role means the same thing upstream expects as
@@ -28,18 +32,22 @@ function normalizeMessages(messages, config) {
     if (message.role === 'developer') message.role = 'system';
   }
 
-  if (config.prompt.injectWhenMissing && out[0]?.role !== 'system') {
-    out.unshift({ role: 'system', content: config.prompt.system });
+  if (promptConfig?.injectWhenMissing && out[0]?.role !== 'system') {
+    out.unshift({ role: 'system', content: promptConfig.system || 'You are a helpful assistant.' });
   }
   return out;
 }
 
-export function prepareChatBody(config, requestBody, upstreamModel) {
+/**
+ * Build a WorkBuddy-style upstream body.
+ *
+ * WorkBuddy only supports streaming, so `stream` is always true; the proxy
+ * aggregates when the client asked for a non-streaming response.
+ */
+export function prepareChatBody(promptConfig, requestBody, upstreamModel) {
   const body = {
     model: upstreamModel,
-    messages: normalizeMessages(requestBody.messages, config),
-    // WorkBuddy only supports streaming; the proxy aggregates when the client
-    // asked for a non-streaming response.
+    messages: normalizeMessages(requestBody.messages, promptConfig),
     stream: true,
     stream_options: { ...(requestBody.stream_options || {}), include_usage: true }
   };
@@ -56,67 +64,26 @@ export function prepareChatBody(config, requestBody, upstreamModel) {
 }
 
 /**
- * Parse an SSE byte stream into events.
- * Yields { line } for comments/blank lines, { data } for JSON payloads and
- * { done: true } for the [DONE] marker.
+ * Build an upstream body for a generic OpenAI-compatible gateway.
+ *
+ * Unlike WorkBuddy this keeps the caller's fields intact — third-party
+ * gateways have their own extensions and dropping unknown keys is worse than
+ * forwarding one they ignore.
  */
-export async function* readSSE(body) {
-  const decoder = new TextDecoder();
-  let buffer = '';
+export function prepareCompatBody(requestBody, upstreamModel, options = {}) {
+  const body = {
+    ...requestBody,
+    model: upstreamModel,
+    // A single transport path (always SSE upstream) keeps the relay simple and
+    // matches every gateway we target.
+    stream: true
+  };
 
-  function* parseLine(line) {
-    if (line.endsWith('\r')) line = line.slice(0, -1);
-    if (line.startsWith('data:')) {
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') {
-        yield { done: true };
-        return;
-      }
-      if (!payload) {
-        yield { line: '' };
-        return;
-      }
-      try {
-        yield { data: JSON.parse(payload) };
-      } catch {
-        yield { raw: line };
-      }
-      return;
-    }
-    yield { line };
+  if (options.includeUsage !== false) {
+    body.stream_options = { ...(requestBody.stream_options || {}), include_usage: true };
   }
 
-  for await (const chunk of body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    let nl;
-    while ((nl = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      yield* parseLine(line);
-    }
-  }
-  buffer += decoder.decode();
-  if (buffer.length) yield* parseLine(buffer);
-}
-
-async function writeWithBackpressure(res, data) {
-  if (res.write(data)) return;
-  await new Promise((resolve, reject) => {
-    const cleanup = () => {
-      res.off('drain', onDrain);
-      res.off('close', onClose);
-    };
-    const onDrain = () => {
-      cleanup();
-      resolve();
-    };
-    const onClose = () => {
-      cleanup();
-      reject(new Error('client disconnected'));
-    };
-    res.on('drain', onDrain);
-    res.on('close', onClose);
-  });
+  return body;
 }
 
 function usageFromTail(tail) {
@@ -264,6 +231,7 @@ export async function collectOpenAICompletion({ body, requestedModel, onFirstChu
     const delta = choice.delta || {};
     if (typeof delta.content === 'string') content += delta.content;
     if (typeof delta.reasoning_content === 'string') reasoning += delta.reasoning_content;
+    if (typeof delta.reasoning === 'string') reasoning += delta.reasoning;
 
     if (Array.isArray(delta.tool_calls)) {
       for (const call of delta.tool_calls) {

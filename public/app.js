@@ -1,22 +1,47 @@
+/**
+ * Buddy2API console.
+ *
+ * Single module, no framework: the dashboard is a handful of routed views over
+ * one server snapshot. Everything that mutates state goes through `api()` and
+ * then re-reads the snapshot, so the UI can never drift from the backend.
+ */
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
   status: null,
   models: [],
-  lastServerKey: '',
-  modelTouched: false,
-  contextTouched: false,
+  logs: [],
+  view: 'overview',
+  channelFilter: 'all',
+  channelQuery: '',
+  connectQuery: '',
+  connectSelected: '',
+  connectSignature: '',
+  connect: [],
   modelSelect: null,
   contextSelect: null,
+  modelTouched: false,
+  contextTouched: false,
+  lastServerKey: '',
   loginBusy: false,
   loginTimer: null,
+  oauthTimer: null,
+  oauthPopup: null,
+  oauthGeneration: 0,
+  oauthState: '',
+  oauthProvider: '',
+  clipboardTimer: null,
+  clipboardSignature: '',
+  smsState: '',
   logsSignature: '',
-  statusErrorShown: false
+  statusErrorShown: false,
+  refreshing: false
 };
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
+/* ========================================================================== */
+/* helpers                                                                    */
+/* ========================================================================== */
 
 function messageFrom(data, res) {
   if (typeof data?.error === 'string') return data.error;
@@ -50,6 +75,7 @@ async function api(path, options = {}, retried = false) {
   if (!res.ok) {
     const err = new Error(messageFrom(data, res));
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -57,6 +83,7 @@ async function api(path, options = {}, retried = false) {
 
 function toast(message, type = 'info') {
   const stack = $('toastStack');
+  if (!stack) return;
   const el = document.createElement('div');
   el.className = `toast ${type === 'info' ? '' : type}`.trim();
   const span = document.createElement('span');
@@ -65,16 +92,20 @@ function toast(message, type = 'info') {
   stack.appendChild(el);
   setTimeout(() => {
     el.classList.add('is-leaving');
-    setTimeout(() => el.remove(), 240);
+    setTimeout(() => el.remove(), 220);
   }, 3800);
 }
 
 function setBusy(button, busy) {
+  if (!button) return;
   button.classList.toggle('is-busy', busy);
-  if (busy) button.disabled = true;
+  // Always clear the attribute when an operation ends; a button left disabled
+  // after a completed action can never be clicked again.
+  button.disabled = Boolean(busy);
 }
 
 function setMsg(el, text, kind) {
+  if (!el) return;
   el.textContent = text || '';
   el.className = 'inline-msg' + (kind ? ` is-${kind}` : '');
 }
@@ -92,7 +123,8 @@ function formatContext(value) {
   return `${Math.round(value / 1000)}K`;
 }
 
-function formatUptime(seconds) {  if (seconds == null) return '—';
+function formatUptime(seconds) {
+  if (seconds == null) return '—';
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -101,6 +133,13 @@ function formatUptime(seconds) {  if (seconds == null) return '—';
   if (h) return `${h}h ${m}m`;
   if (m) return `${m}m ${s}s`;
   return `${s}s`;
+}
+
+function formatTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function expiryInfo(iso) {
@@ -119,38 +158,31 @@ function decodeJwt(token) {
   try {
     const payload = token.split('.')[1];
     if (!payload) return null;
-    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    return JSON.parse(new TextDecoder().decode(bytes));
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(decodeURIComponent(escape(json)));
   } catch {
     return null;
   }
 }
 
 function findTokens(text) {
-  const matches = text.match(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g) || [];
+  const found = [];
   const seen = new Set();
-  const out = [];
-  for (const token of matches) {
+  const re = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+  for (const token of String(text || '').match(re) || []) {
     if (seen.has(token)) continue;
     seen.add(token);
     const payload = decodeJwt(token);
-    if (!payload) continue;
-    out.push({
+    found.push({
       token,
-      type: String(payload.typ || '').toLowerCase() === 'offline' ? 'refresh' : 'access',
-      username: payload.preferred_username || payload.username || '',
-      email: payload.email || '',
-      exp: Number(payload.exp) || 0
+      kind: String(payload?.typ || '').toLowerCase() === 'offline' ? 'refresh' : 'access',
+      exp: Number(payload?.exp) || 0
     });
   }
-  return out;
+  return found;
 }
 
 async function copyText(text) {
-  if (!text) return false;
   try {
     await navigator.clipboard.writeText(text);
     return true;
@@ -162,436 +194,195 @@ async function copyText(text) {
       area.style.opacity = '0';
       document.body.appendChild(area);
       area.select();
-      document.execCommand('copy');
+      const ok = document.execCommand('copy');
       area.remove();
-      return true;
+      return ok;
     } catch {
       return false;
     }
   }
 }
 
-// ---------------------------------------------------------------------------
-// custom select
-// ---------------------------------------------------------------------------
-
-class CustomSelect {
-  constructor(element, { searchable = false, onChange = () => {} } = {}) {
-    this.el = element;
-    this.searchable = searchable;
-    this.onChange = onChange;
-    this.options = [];
-    this.value = '';
-    this.disabled = false;
-    this.open = false;
-    this.active = -1;
-    this.filtered = [];
-    this.query = '';
-    this.build();
-  }
-
-  build() {
-    this.el.classList.add('cselect');
-    this.el.replaceChildren();
-
-    this.trigger = document.createElement('button');
-    this.trigger.type = 'button';
-    this.trigger.className = 'cselect-trigger';
-    this.trigger.setAttribute('aria-haspopup', 'listbox');
-    this.trigger.setAttribute('aria-expanded', 'false');
-    this.trigger.innerHTML = `
-      <span class="cselect-value"><span class="t"></span><span class="s"></span></span>
-      <svg class="cselect-chevron" viewBox="0 0 12 8" fill="none" aria-hidden="true">
-        <path d="M1 1.5 6 6.5 11 1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>`;
-    this.el.appendChild(this.trigger);
-
-    this.popover = document.createElement('div');
-    this.popover.className = 'cselect-popover';
-    this.popover.hidden = true;
-    this.popover.tabIndex = -1;
-
-    if (this.searchable) {
-      this.search = document.createElement('input');
-      this.search.className = 'cselect-search';
-      this.search.placeholder = '搜索模型…';
-      this.search.autocomplete = 'off';
-      this.search.spellcheck = false;
-      this.search.setAttribute('aria-label', '搜索模型');
-      this.popover.appendChild(this.search);
-    }
-
-    this.list = document.createElement('div');
-    this.list.className = 'cselect-list';
-    this.list.setAttribute('role', 'listbox');
-    this.list.tabIndex = -1;
-    this.popover.appendChild(this.list);
-    this.el.appendChild(this.popover);
-
-    this.trigger.addEventListener('click', () => this.toggle());
-    this.trigger.addEventListener('keydown', (event) => {
-      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
-        event.preventDefault();
-        this.openMenu();
-      }
-    });
-
-    this.popover.addEventListener('focusout', (event) => {
-      if (!this.el.contains(event.relatedTarget)) this.closeMenu(false);
-    });
-
-    if (this.search) {
-      this.search.addEventListener('input', () => {
-        this.query = this.search.value;
-        this.active = 0;
-        this.renderOptions();
-      });
-      this.search.addEventListener('keydown', (event) => this.handleKey(event));
-    } else {
-      this.popover.addEventListener('keydown', (event) => this.handleKey(event));
-    }
-
-    document.addEventListener('click', (event) => {
-      if (!this.el.contains(event.target)) this.closeMenu(false);
-    });
-
-    this.renderLabel();
-  }
-
-  setOptions(options) {
-    this.options = Array.isArray(options) ? options.slice() : [];
-    if (!this.options.some((option) => option.value === this.value)) {
-      this.value = this.options[0]?.value ?? '';
-    }
-    this.renderLabel();
-    if (this.open) {
-      this.query = '';
-      if (this.search) this.search.value = '';
-      this.active = -1;
-      this.renderOptions();
-    }
-  }
-
-  setValue(value) {
-    const next = String(value ?? '');
-    if (!this.options.some((option) => option.value === next)) return false;
-    this.value = next;
-    this.renderLabel();
-    return true;
-  }
-
-  getValue() {
-    return this.value;
-  }
-
-  hasValue(value) {
-    return this.options.some((option) => option.value === String(value));
-  }
-
-  hasOptions() {
-    return this.options.length > 0;
-  }
-
-  setDisabled(disabled) {
-    this.disabled = !!disabled;
-    this.trigger.disabled = this.disabled;
-    if (this.disabled) this.closeMenu(false);
-  }
-
-  renderLabel() {
-    const option = this.options.find((item) => item.value === this.value);
-    const title = this.trigger.querySelector('.t');
-    const subtitle = this.trigger.querySelector('.s');
-    title.textContent = option ? option.label : this.el.dataset.placeholder || '请选择';
-    subtitle.textContent = option?.description || '';
-    this.trigger.title = option ? [option.label, option.description].filter(Boolean).join(' · ') : '';
-  }
-
-  toggle() {
-    if (this.open) this.closeMenu();
-    else this.openMenu();
-  }
-
-  openMenu() {
-    if (this.disabled || this.open) return;
-    this.open = true;
-    this.popover.hidden = false;
-    this.popover.classList.remove('is-up');
-    this.trigger.setAttribute('aria-expanded', 'true');
-    this.query = '';
-    if (this.search) this.search.value = '';
-    this.active = -1;
-    this.renderOptions();
-
-    const rect = this.trigger.getBoundingClientRect();
-    const popoverHeight = this.popover.offsetHeight;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    if (spaceBelow < popoverHeight + 12 && rect.top > popoverHeight + 12) {
-      this.popover.classList.add('is-up');
-    }
-
-    requestAnimationFrame(() => {
-      if (this.search) this.search.focus();
-      else this.popover.focus({ preventScroll: true });
-      this.scrollActiveIntoView();
-    });
-  }
-
-  closeMenu(refocus = true) {
-    if (!this.open) return;
-    this.open = false;
-    this.popover.hidden = true;
-    this.trigger.setAttribute('aria-expanded', 'false');
-    if (refocus) this.trigger.focus({ preventScroll: true });
-  }
-
-  renderOptions() {
-    const query = this.query.trim().toLowerCase();
-    this.filtered = this.options.filter((option) => {
-      if (!query) return true;
-      const text = `${option.label} ${option.description || ''} ${option.searchText || ''}`.toLowerCase();
-      return text.includes(query);
-    });
-
-    this.list.replaceChildren();
-
-    if (!this.filtered.length) {
-      const empty = document.createElement('div');
-      empty.className = 'cselect-empty';
-      empty.textContent = '没有匹配项';
-      this.list.appendChild(empty);
-      this.active = -1;
-      return;
-    }
-
-    if (this.active < 0 || this.active >= this.filtered.length) {
-      const selected = this.filtered.findIndex((option) => option.value === this.value);
-      this.active = selected >= 0 ? selected : 0;
-    }
-
-    this.filtered.forEach((option, index) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'cselect-option';
-      button.tabIndex = -1;
-      button.setAttribute('role', 'option');
-      button.setAttribute('aria-selected', option.value === this.value ? 'true' : 'false');
-      button.classList.toggle('is-selected', option.value === this.value);
-      button.classList.toggle('is-active', index === this.active);
-
-      const text = document.createElement('span');
-      text.className = 'opt-text';
-      const name = document.createElement('span');
-      name.className = 'opt-name';
-      name.textContent = option.label;
-      text.appendChild(name);
-      if (option.description) {
-        const meta = document.createElement('span');
-        meta.className = 'opt-meta';
-        meta.textContent = option.description;
-        text.appendChild(meta);
-      }
-
-      const check = document.createElement('span');
-      check.className = 'check';
-      check.textContent = '✓';
-      button.append(text, check);
-
-      button.addEventListener('mouseenter', () => {
-        this.active = index;
-        this.updateActive();
-      });
-      button.addEventListener('click', () => this.selectOption(option));
-      this.list.appendChild(button);
-    });
-
-    this.scrollActiveIntoView();
-  }
-
-  selectOption(option) {
-    const changed = option.value !== this.value;
-    this.value = option.value;
-    this.renderLabel();
-    this.closeMenu();
-    if (changed) this.onChange(option.value);
-  }
-
-  handleKey(event) {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      this.closeMenu();
-      return;
-    }
-
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (!this.open) {
-        this.openMenu();
-        return;
-      }
-      if (!this.filtered.length) return;
-      const direction = event.key === 'ArrowDown' ? 1 : -1;
-      this.active = (this.active + direction + this.filtered.length) % this.filtered.length;
-      this.updateActive();
-      return;
-    }
-
-    if (event.key === 'Home' || event.key === 'End') {
-      if (!this.open || !this.filtered.length) return;
-      event.preventDefault();
-      this.active = event.key === 'Home' ? 0 : this.filtered.length - 1;
-      this.updateActive();
-      return;
-    }
-
-    if (event.key === 'Enter') {
-      if (!this.open) return;
-      event.preventDefault();
-      const option = this.filtered[this.active];
-      if (option) this.selectOption(option);
-    }
-  }
-
-  updateActive() {
-    this.list.querySelectorAll('.cselect-option').forEach((button, index) => {
-      button.classList.toggle('is-active', index === this.active);
-    });
-    this.scrollActiveIntoView();
-  }
-
-  scrollActiveIntoView() {
-    const node = this.list.querySelectorAll('.cselect-option')[this.active];
-    if (node) node.scrollIntoView({ block: 'nearest' });
-  }
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
-// ---------------------------------------------------------------------------
-// token preview
-// ---------------------------------------------------------------------------
-
-function updateTokenPreview() {
-  const text = $('tokenInput').value.trim();
-  const chips = $('parsedChips');
-  chips.replaceChildren();
-
-  $('saveBtn').disabled = !text || $('saveBtn').classList.contains('is-busy');
-
-  if (!text) {
-    chips.hidden = true;
-    return;
-  }
-
-  chips.hidden = false;
-  const tokens = findTokens(text);
-
-  if (!tokens.length) {
-    const chip = document.createElement('span');
-    chip.className = 'chip is-warn';
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    chip.appendChild(dot);
-    chip.appendChild(document.createTextNode('未识别到 JWT，请检查粘贴内容'));
-    chips.appendChild(chip);
-    return;
-  }
-
-  for (const token of tokens) {
-    const chip = document.createElement('span');
-    chip.className = `chip${token.type === 'refresh' ? ' is-refresh' : ''}`;
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    chip.appendChild(dot);
-
-    const label = document.createElement('b');
-    label.textContent = token.type === 'refresh' ? '刷新令牌' : '访问令牌';
-    chip.appendChild(label);
-
-    const who = token.username || token.email || '';
-    if (who) chip.appendChild(document.createTextNode(` · ${who}`));
-
-    if (token.exp) {
-      const date = new Date(token.exp * 1000).toLocaleDateString('zh-CN');
-      chip.appendChild(document.createTextNode(` · 至 ${date}`));
-    }
-    chips.appendChild(chip);
-  }
-
-  if (/x-device-token|deviceToken/i.test(text) || /x-user-id|userId/i.test(text)) {
-    const chip = document.createElement('span');
-    chip.className = 'chip';
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    chip.appendChild(dot);
-    chip.appendChild(document.createTextNode('设备信息将一并保存'));
-    chips.appendChild(chip);
-  }
+function clear(node) {
+  if (node) node.replaceChildren();
 }
 
-// ---------------------------------------------------------------------------
-// status rendering
-// ---------------------------------------------------------------------------
+/* ---------------------------------------------------------- derived state */
+
+function activeChannels() {
+  return Array.isArray(state.status?.channels) ? state.status.channels : [];
+}
+
+function isConfigured() {
+  const channels = activeChannels();
+  if (channels.length) return channels.some((c) => c.enabled !== false && c.configured);
+  return !!(state.status?.user || state.status?.token?.expiresAt);
+}
+
+function defaultChannelStatus() {
+  const channels = activeChannels();
+  if (!channels.length) return null;
+  const model = String(state.status?.defaultModel || '');
+  const prefix = model.includes('/') ? model.slice(0, model.indexOf('/')) : '';
+  return channels.find((c) => c.id === prefix) || channels[0];
+}
+
+function contextWindowForModel(model) {
+  const channel = activeChannels().find((entry) => entry.id === model?.channel);
+  return channel?.models?.contextWindow || state.status?.models?.contextWindow || {};
+}
+
+/** The channel whose browser login / account pool the console manages. */
+function loginChannelStatus() {
+  return (
+    activeChannels().find((c) => c.enabled !== false && c.capabilities?.login) || null
+  );
+}
+
+function oauthChannelCount() {
+  return activeChannels().filter((c) => c.capabilities?.oauth).length;
+}
+
+/* ========================================================================== */
+/* router                                                                     */
+/* ========================================================================== */
+
+const VIEWS = ['overview', 'channels', 'connect', 'accounts', 'logs', 'settings'];
+
+function setView(name, { push = true } = {}) {
+  const view = VIEWS.includes(name) ? name : 'overview';
+  state.view = view;
+
+  for (const section of document.querySelectorAll('.view')) {
+    section.hidden = section.dataset.view !== view;
+  }
+  for (const button of document.querySelectorAll('.nav-item')) {
+    if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+
+  if (push && location.hash !== `#${view}`) {
+    history.replaceState(null, '', `#${view}`);
+  }
+
+  // Entering a view should not leave a stale focused control behind.
+  const heading = document.querySelector(`#view-${view} h2`);
+  if (heading) heading.setAttribute('tabindex', '-1');
+
+  if (view === 'logs') loadLogs();
+}
+
+/* ========================================================================== */
+/* status rendering                                                           */
+/* ========================================================================== */
 
 function renderStatus() {
   const s = state.status;
   if (!s) return;
 
-  const configured = !!(s.user || s.token?.expiresAt);
+  const configured = isConfigured();
   const running = !!s.running;
+  const channels = activeChannels();
+  const defaultChannel = defaultChannelStatus();
+  const loginChannel = loginChannelStatus();
+  const loginUser = loginChannel?.user || null;
+  const canLogin = Boolean(loginChannel);
 
+  // -- sidebar
   const pill = $('statusPill');
   pill.dataset.state = running ? 'running' : configured ? 'configured' : 'idle';
   $('statusText').textContent = running ? '运行中' : configured ? '已连接 · 未启动' : '未配置';
+  $('navChannelCount').textContent = String(channels.length);
+  $('sidebarMeta').textContent = running
+    ? `${s.defaultModel || '默认模型'} · 监听中`
+    : configured
+      ? `${channels.length} 个渠道 · 待启动`
+      : '本机运行 · 凭据仅存本地';
 
-  const credState = $('credState');
-  credState.textContent = configured ? '已连接' : '待填写';
-  credState.classList.toggle('is-on', configured);
+  $('overviewSubtitle').textContent = running
+    ? `网关运行中 · ${s.defaultModel || '默认模型'}`
+    : configured
+      ? '渠道已就绪，可以启动网关'
+      : '连接渠道，启动本地网关';
 
+  // -- start card
   const startState = $('startState');
   startState.textContent = running ? '运行中' : configured ? '已配置' : '等待凭据';
   startState.classList.toggle('is-on', running);
 
-  const loginBtn = $('loginBtn');
-  if (!state.loginBusy) {
+  const credState = $('credState');
+  if (credState) {
+    const loginConfigured = Boolean(loginChannel?.configured);
+    credState.textContent = loginConfigured ? '已连接' : '待填写';
+    credState.classList.toggle('is-on', loginConfigured);
+  }
+
+  // -- credentials card visibility
+  const credCard = $('cardCredentials');
+  if (credCard) credCard.hidden = !canLogin;
+
+  if (!state.loginBusy && $('loginBtn')) {
+    const loginBtn = $('loginBtn');
     loginBtn.disabled = false;
-    loginBtn.querySelector('.btn-label').textContent = s.user
+    loginBtn.querySelector('.btn-label').textContent = loginUser
       ? '重新登录 / 切换账号'
       : '使用 WorkBuddy 账号登录';
-    if (s.user) {
-      $('loginHint').textContent = `当前账号 ${s.user.username || s.user.email || ''} · 点击可重新授权或切换账号`;
-    } else {
-      $('loginHint').textContent = '在浏览器完成授权后自动写入 token，无需复制';
-    }
+    $('loginHint').textContent = loginUser
+      ? `当前账号 ${loginUser.username || loginUser.email || ''} · 点击可重新授权`
+      : '在浏览器完成授权后自动写入 token，无需复制';
   }
-  renderLoginAccount(s.user);
-  renderAccounts(s.accounts || []);
-  $('addAccountBtn').disabled = state.loginBusy;
-  $('accountFoot').textContent = `同一会话优先使用同一账号 · 当前保持 ${s.routing?.sessions ?? 0} 个会话`;
+  renderLoginAccount(loginUser);
+  renderAccounts(loginChannel?.accounts || []);
+  if ($('addAccountBtn')) $('addAccountBtn').disabled = state.loginBusy || !canLogin;
+  if ($('accountFoot')) {
+    $('accountFoot').textContent = canLogin
+      ? `${loginChannel.label} · 当前保持 ${loginChannel.routing?.sessions ?? 0} 个会话`
+      : `${defaultChannel?.label || '当前渠道'} 不支持账号管理`;
+  }
 
+  // -- account summary
   const userName = s.user?.username;
   const userEmail = s.user?.email;
-  $('userLine').textContent = userName
-    ? userEmail && userEmail !== userName
-      ? `${userName} · ${userEmail}`
-      : userName
-    : configured
-      ? '已连接 WorkBuddy'
-      : '未连接账号';
+  if ($('userLine')) {
+    $('userLine').textContent = userName
+      ? userEmail && userEmail !== userName
+        ? `${userName} · ${userEmail}`
+        : userName
+      : defaultChannel
+        ? `${defaultChannel.label} · ${defaultChannel.type === 'account' ? '账号渠道' : 'API Key 渠道'}`
+        : '未连接渠道';
+  }
 
   const expiry = expiryInfo(s.token?.expiresAt);
-  const expiryLine = $('expiryLine');
-  expiryLine.textContent = expiry.text;
-  expiryLine.className = `expiry ${expiry.cls}`.trim();
-  expiryLine.title = s.token?.expiresAt
-    ? `到期时间：${new Date(s.token.expiresAt).toLocaleString('zh-CN')}${s.token.hasRefreshToken ? '' : '（无刷新令牌）'}`
-    : '';
+  const expiryApplies = defaultChannel?.type === 'workbuddy' || Boolean(s.token?.expiresAt);
+  if ($('expiryLine')) {
+    const expiryLine = $('expiryLine');
+    expiryLine.textContent = expiryApplies ? expiry.text : 'API Key 渠道';
+    expiryLine.className = `expiry ${expiryApplies ? expiry.cls : ''}`.trim();
+    expiryLine.title = s.token?.expiresAt
+      ? `到期时间：${new Date(s.token.expiresAt).toLocaleString('zh-CN')}${s.token.hasRefreshToken ? '' : '（无刷新令牌）'}`
+      : '';
+  }
 
+  // -- stats
   const stats = s.stats || {};
   $('statRequests').textContent = formatNumber(stats.requests ?? 0);
   $('statPrompt').textContent = formatNumber(stats.promptTokens ?? 0);
   $('statCompletion').textContent = formatNumber(stats.completionTokens ?? 0);
   $('statUptime').textContent = formatUptime(stats.uptimeSeconds ?? 0);
+  const errors = Number(stats.errors || 0);
+  $('statErrors').textContent = errors ? `${errors} 次失败` : '无失败';
+  $('statErrors').className = errors ? 'is-bad' : '';
+  $('statTtfb').textContent = averageTtfb();
 
-  // key input
+  // -- key input
   const serverKey = s.apiKey && s.apiKey !== 'sk-wb2api-local' ? s.apiKey : '';
   const keyInput = $('keyInput');
   if (serverKey && document.activeElement !== keyInput && (!keyInput.value || keyInput.value === state.lastServerKey)) {
@@ -600,7 +391,7 @@ function renderStatus() {
   if (!serverKey && !keyInput.value) keyInput.placeholder = '留空则自动生成';
   state.lastServerKey = serverKey;
 
-  // model select
+  // -- model select
   const modelSelect = state.modelSelect;
   if (modelSelect) {
     if (
@@ -622,7 +413,7 @@ function renderStatus() {
     if (!state.contextTouched && state.models.length) {
       const selected = state.models.find((item) => item.id === (modelSelect?.getValue() || ''));
       const contextKey = selected ? selected.root || selected.id : '';
-      const settings = s.models?.contextWindow || {};
+      const settings = contextWindowForModel(selected);
       const configuredContext = Number(settings.overrides?.[contextKey] ?? settings.default ?? 0);
       if (
         configuredContext &&
@@ -638,8 +429,9 @@ function renderStatus() {
 
   $('modelsBtn').disabled = !configured;
   $('startBtn').disabled = !configured || $('startBtn').classList.contains('is-busy');
-  $('startBtn').querySelector('.btn-label').textContent = running ? '更新并应用' : '启动反代';
+  $('startBtn').querySelector('.btn-label').textContent = running ? '更新并应用' : '启动网关';
 
+  // -- output panel
   $('cardOutput').classList.toggle('is-live', running);
   $('outputEmpty').hidden = running;
   $('outputLive').hidden = !running;
@@ -647,8 +439,64 @@ function renderStatus() {
   if (running) {
     $('baseUrlText').textContent = s.baseUrl || '—';
     $('apiKeyText').textContent = s.apiKey || '—';
-    $('readyMeta').textContent = `${s.defaultModel || '默认模型'} · OpenAI / Anthropic 兼容`;
+    $('readyMeta').textContent = `${defaultChannel?.label || '默认渠道'} · ${s.defaultModel || '默认模型'}`;
     renderSnippet();
+  }
+
+  renderChannels(channels);
+  renderHealth(channels);
+  renderSettings();
+  loadConnectPresets();
+}
+
+function averageTtfb() {
+  const rows = state.logs.filter((row) => row.ttfbMs != null);
+  if (!rows.length) return '—';
+  const avg = rows.reduce((sum, row) => sum + row.ttfbMs, 0) / rows.length;
+  return avg >= 1000 ? `${(avg / 1000).toFixed(1)}s` : `${Math.round(avg)}ms`;
+}
+
+function renderHealth(channels) {
+  const grid = $('healthGrid');
+  if (!grid) return;
+  clear(grid);
+
+  const enabled = channels.filter((channel) => channel.enabled !== false);
+  const ready = enabled.filter((channel) => channel.configured);
+  $('healthMeta').textContent = channels.length
+    ? `${ready.length}/${enabled.length} 个启用渠道已就绪`
+    : '还没有渠道';
+
+  if (!channels.length) {
+    grid.appendChild(el('div', 'empty-state', '到「连接」页添加第一个渠道'));
+    return;
+  }
+
+  const defaultId = defaultChannelStatus()?.id;
+  for (const channel of channels) {
+    const item = el(
+      'button',
+      `health-item${channel.enabled === false ? ' is-off' : ''}`
+    );
+    item.type = 'button';
+    item.addEventListener('click', () => setView('channels'));
+
+    const top = el('div', 'health-top');
+    const dot = el('span', 'channel-dot');
+    if (channel.enabled !== false && channel.configured) dot.classList.add('is-on');
+    else if (channel.enabled !== false) dot.classList.add('is-warn');
+    top.appendChild(dot);
+    top.appendChild(el('strong', '', channel.label || channel.id));
+    if (channel.id === defaultId) top.appendChild(el('span', 'channel-badge is-default', '默认'));
+    item.appendChild(top);
+
+    const meta = [];
+    if (channel.modelCount) meta.push(`${channel.modelCount} 模型`);
+    if (channel.accountCount) meta.push(`${channel.accountCount} 账号`);
+    if (channel.enabled === false) meta.push('已停用');
+    else if (!channel.configured) meta.push('待配置');
+    item.appendChild(el('span', 'health-meta', meta.join(' · ') || '—'));
+    grid.appendChild(item);
   }
 }
 
@@ -665,11 +513,14 @@ function renderSnippet() {
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"你好"}],"stream":true}'`;
 }
 
-async function refreshStatus() {
+async function refreshStatus({ silent = false } = {}) {
+  if (state.refreshing) return;
+  state.refreshing = true;
   try {
     state.status = await api('/admin/status');
     state.statusErrorShown = false;
     renderStatus();
+    if (!silent) await loadLogs();
   } catch (err) {
     if (!state.statusErrorShown) {
       state.statusErrorShown = true;
@@ -677,12 +528,14 @@ async function refreshStatus() {
       $('statusText').textContent = '连接失败';
       toast(`无法读取状态：${err.message}`, 'error');
     }
+  } finally {
+    state.refreshing = false;
   }
 }
 
-// ---------------------------------------------------------------------------
-// models
-// ---------------------------------------------------------------------------
+/* ========================================================================== */
+/* models                                                                     */
+/* ========================================================================== */
 
 function renderModels() {
   const select = state.modelSelect;
@@ -698,8 +551,8 @@ function renderModels() {
     state.models.map((model) => ({
       value: model.id,
       label: model.name && model.name !== model.id ? model.name : model.id,
-      description: model.name && model.name !== model.id ? model.id : '',
-      searchText: `${model.id} ${model.name || ''} ${model.root || ''}`
+      description: model.channel ? `${model.channel} · ${model.upstream_id || model.id}` : '',
+      searchText: `${model.id} ${model.name || ''} ${model.root || ''} ${model.channel || ''}`
     }))
   );
 
@@ -709,7 +562,7 @@ function renderModels() {
   }
 
   if (state.status) {
-    const ready = !!(state.status.user || state.status.token?.expiresAt);
+    const ready = isConfigured();
     select.setDisabled(!ready);
     $('modelsBtn').disabled = !ready;
   }
@@ -721,7 +574,7 @@ function renderModels() {
 
 function renderModelChips() {
   const row = $('modelChips');
-  row.replaceChildren();
+  clear(row);
   const popular = [
     'deepseek-v4.1-flash',
     'deepseek-v4.1-flash-sg',
@@ -731,17 +584,18 @@ function renderModelChips() {
   ];
   const select = state.modelSelect;
   const current = select?.getValue();
-  for (const id of popular) {
-    const model = state.models.find((item) => item.id === id);
+  for (const wanted of popular) {
+    const model = state.models.find(
+      (item) => item.upstream_id === wanted || item.id === wanted || item.id.endsWith(`/${wanted}`)
+    );
     if (!model) continue;
-    const button = document.createElement('button');
+    const button = el('button', `chip${current === model.id ? ' is-active' : ''}`);
     button.type = 'button';
-    button.className = `model-chip${current === id ? ' is-active' : ''}`;
-    button.textContent = id;
-    button.title = model.name || id;
+    button.textContent = model.channel ? `${model.channel}/${wanted}` : wanted;
+    button.title = model.name || model.id;
     button.addEventListener('click', () => {
       if (!select) return;
-      select.setValue(id);
+      select.setValue(model.id);
       state.modelTouched = true;
       state.contextTouched = false;
       updateModelDescription();
@@ -756,10 +610,11 @@ function updateModelDescription() {
   const model = state.models.find((item) => item.id === state.modelSelect?.getValue());
   const desc = $('modelDesc');
   if (!model) {
-    desc.textContent = '保存凭据后加载模型列表';
+    desc.textContent = isConfigured() ? '没有可用模型，检查渠道状态' : '连接渠道后加载模型列表';
     return;
   }
   const parts = [];
+  if (model.channel_label) parts.push(model.channel_label);
   if (model.context_length) parts.push(`${formatContext(model.context_length)} 上下文`);
   if (model.max_output_tokens) parts.push(`${formatNumber(model.max_output_tokens)} 输出`);
   const caps = model.capabilities || {};
@@ -801,18 +656,11 @@ function updateContextOptions() {
     return;
   }
 
-  select.setOptions(
-    values.map((value) => ({
-      value: String(value),
-      label: formatContext(value)
-    }))
-  );
+  select.setOptions(values.map((value) => ({ value: String(value), label: formatContext(value) })));
 
-  const configuredContextWindow = state.status?.models?.contextWindow || {};
+  const configuredWindow = contextWindowForModel(model);
   const contextKey = model.root || model.id;
-  const configured = Number(
-    configuredContextWindow.overrides?.[contextKey] ?? configuredContextWindow.default ?? 0
-  );
+  const configured = Number(configuredWindow.overrides?.[contextKey] ?? configuredWindow.default ?? 0);
   const desired =
     state.contextTouched && select.hasValue(String(previous))
       ? String(previous)
@@ -821,7 +669,7 @@ function updateContextOptions() {
         : String(values[values.length - 1]);
 
   select.setValue(desired);
-  select.setDisabled(!(state.status?.user || state.status?.token?.expiresAt));
+  select.setDisabled(!isConfigured());
   updateContextDescription();
 }
 
@@ -830,11 +678,11 @@ function updateContextDescription() {
   const model = state.models.find((item) => item.id === state.modelSelect?.getValue());
   const selected = Number(state.contextSelect?.getValue()) || 0;
   if (!model || !selected) {
-    desc.textContent = '用于向客户端声明可用上下文，代理不会截断请求';
+    desc.textContent = '向客户端声明的上限，网关不会截断请求';
     return;
   }
   const max = Number(model.max_context_length || model.context_length || 0);
-  desc.textContent = `声明 ${formatContext(selected)} · 模型上限 ${formatContext(max)} · 代理不会截断请求`;
+  desc.textContent = `声明 ${formatContext(selected)} · 模型上限 ${formatContext(max)}`;
 }
 
 async function loadModels(force = false) {
@@ -849,13 +697,1078 @@ async function loadModels(force = false) {
     toast(`模型列表加载失败：${err.message}`, 'error');
   } finally {
     setBusy(button, false);
-    button.disabled = !(state.status?.user || state.status?.token?.expiresAt);
+    button.disabled = !isConfigured();
   }
 }
 
-// ---------------------------------------------------------------------------
-// actions
-// ---------------------------------------------------------------------------
+/* ========================================================================== */
+/* channels                                                                   */
+/* ========================================================================== */
+
+function channelTypeLabel(channel) {
+  if (channel.type === 'workbuddy') return 'WorkBuddy';
+  if (channel.type === 'account') return '账号渠道';
+  if (channel.type === 'openai-compatible') return channel.options?.preset ? '预设' : 'OpenAI 兼容';
+  return channel.type;
+}
+
+function channelMatches(channel, query) {
+  if (!query) return true;
+  const haystack = [
+    channel.id,
+    channel.label,
+    channel.type,
+    channel.options?.preset || '',
+    ...(channel.options?.models || [])
+  ]
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(query);
+}
+
+function channelPassesFilter(channel, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'ready') return channel.configured && channel.enabled !== false;
+  if (filter === 'pending') return !channel.configured;
+  if (filter === 'oauth') return Boolean(channel.capabilities?.oauth);
+  return true;
+}
+
+function renderChannels(channels) {
+  const list = $('channelList');
+  if (!list) return;
+
+  const defaultId = defaultChannelStatus()?.id;
+  const query = state.channelQuery.trim().toLowerCase();
+  const visible = channels.filter(
+    (c) => channelPassesFilter(c, state.channelFilter) && channelMatches(c, query)
+  );
+
+  clear(list);
+
+  if (!channels.length) {
+    const empty = el('div', 'card empty-state');
+    empty.textContent = '还没有渠道。到「连接」页添加第一个渠道。';
+    const wrap = el('div');
+    wrap.appendChild(empty);
+    list.appendChild(wrap);
+    return;
+  }
+
+  if (!visible.length) {
+    list.appendChild(el('div', 'card empty-state', '没有符合条件的渠道'));
+    return;
+  }
+
+  for (const channel of visible) {
+    const card = el('div', `channel-card${channel.enabled === false ? ' is-disabled' : ''}`);
+
+    const dot = el('span', 'channel-dot');
+    if (channel.enabled !== false && channel.configured) dot.classList.add('is-on');
+    else if (channel.enabled !== false) dot.classList.add('is-warn');
+
+    const main = el('div', 'channel-main');
+    const title = el('div', 'channel-title');
+    title.appendChild(el('strong', '', channel.label || channel.id));
+
+    if (channel.id === defaultId) title.appendChild(el('span', 'channel-badge is-default', '默认'));
+    if (channel.capabilities?.oauth) title.appendChild(el('span', 'channel-badge is-oauth', 'OAuth'));
+    title.appendChild(el('span', 'channel-badge', channelTypeLabel(channel)));
+    main.appendChild(title);
+
+    const parts = [];
+    if (channel.accountCount != null) parts.push(`${channel.accountCount} 个账号`);
+    if (channel.modelCount) parts.push(`${channel.modelCount} 个模型`);
+    parts.push(channel.configured ? '已配置' : '待配置');
+
+    // Show the credential state the way the channel actually authenticates.
+    if (channel.type === 'account') {
+      parts.push(channel.options?.hasToken ? 'OAuth 已授权' : '待授权');
+    } else if (channel.type === 'openai-compatible') {
+      parts.push(channel.options?.hasKey ? 'Key 已保存' : '免密 / 无 Key');
+    }
+    if (channel.routing?.sessions) parts.push(`${channel.routing.sessions} 个会话`);
+    main.appendChild(el('div', 'channel-meta', parts.join(' · ')));
+
+    const preset = (state.status?.connect || []).find((entry) => entry.id === channel.options?.preset);
+    if (preset?.note) main.appendChild(el('div', 'channel-hint', preset.note));
+
+    const actions = el('div', 'channel-actions');
+
+    const detail = el('button', 'ghost mini', '详情');
+    detail.type = 'button';
+    detail.setAttribute('aria-expanded', 'false');
+    actions.appendChild(detail);
+
+    const test = el('button', 'ghost mini', '测试');
+    test.type = 'button';
+    test.addEventListener('click', () => testChannel(channel.id));
+    actions.appendChild(test);
+
+    const toggle = el('button', 'ghost mini', channel.enabled === false ? '启用' : '停用');
+    toggle.type = 'button';
+    toggle.addEventListener('click', () => toggleChannel(channel.id, channel.enabled === false));
+    actions.appendChild(toggle);
+
+    if (channels.length > 1) {
+      const remove = el('button', 'ghost mini danger', '删除');
+      remove.type = 'button';
+      remove.addEventListener('click', () => removeChannel(channel.id));
+      actions.appendChild(remove);
+    }
+
+    card.append(dot, main, actions);
+
+    // -- expandable detail
+    const panel = el('div', 'channel-detail');
+    panel.hidden = true;
+    panel.appendChild(buildChannelDetail(channel));
+    card.appendChild(panel);
+
+    detail.addEventListener('click', () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      detail.setAttribute('aria-expanded', open ? 'true' : 'false');
+      detail.textContent = open ? '收起' : '详情';
+      card.classList.toggle('is-open', open);
+    });
+
+    list.appendChild(card);
+  }
+}
+
+/** Detail body: base URL, credential state, models and live accounts. */
+function buildChannelDetail(channel) {
+  const wrap = el('div', 'detail-body');
+
+  const rows = [
+    ['渠道 ID', channel.id],
+    ['类型', channelTypeLabel(channel)],
+    ['Base URL', channel.options?.baseUrl || '—']
+  ];
+  if (channel.type === 'openai-compatible') {
+    rows.push(['凭据', channel.options?.hasKey ? `Key ${channel.options.maskedKey || '已保存'}` : '无（免密或本机）']);
+  }
+  if (channel.type === 'account') {
+    rows.push(['凭据', channel.options?.hasToken ? 'OAuth 已授权' : '尚未授权']);
+    if (channel.options?.oauth) rows.push(['授权方式', channel.options.oauth]);
+  }
+  if (channel.models?.default) rows.push(['渠道默认模型', channel.models.default]);
+
+  const list = el('dl', 'info-list');
+  for (const [label, value] of rows) {
+    const row = el('div');
+    row.appendChild(el('dt', '', label));
+    row.appendChild(el('dd', '', String(value)));
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+
+  const accounts = Array.isArray(channel.accounts) ? channel.accounts : [];
+  if (accounts.length) {
+    wrap.appendChild(el('div', 'detail-heading', `账号（${accounts.length}）`));
+    const box = el('div', 'account-list');
+    for (const account of accounts) {
+      const row = el('div', `account-row${account.enabled === false ? ' is-disabled' : ''}`);
+      row.appendChild(
+        el('div', 'avatar', String(account.username || account.email || account.label || '?').slice(0, 1).toUpperCase())
+      );
+      const who = el('div', 'who');
+      who.appendChild(el('span', 'name', account.username || account.label || account.id));
+      const meta = [];
+      meta.push(`并发 ${account.load ?? 0}/${account.maxConcurrency ?? 1}`);
+      if (account.sessions) meta.push(`会话 ${account.sessions}`);
+      if (account.expiresAt) meta.push(`到期 ${new Date(account.expiresAt).toLocaleDateString('zh-CN')}`);
+      if (account.coolingDown) meta.push('冷却中');
+      who.appendChild(el('span', 'meta', meta.join(' · ')));
+      row.appendChild(who);
+      row.appendChild(el('span', 'channel-badge', account.enabled === false ? '已停用' : '启用'));
+      box.appendChild(row);
+    }
+    wrap.appendChild(box);
+  }
+
+  const aliases = Object.entries(channel.models?.aliases || {});
+  if (aliases.length) {
+    wrap.appendChild(el('div', 'detail-heading', `别名（${aliases.length}）`));
+    const chips = el('div', 'chip-row');
+    for (const [from, to] of aliases) chips.appendChild(el('span', 'chip', `${from} → ${to}`));
+    wrap.appendChild(chips);
+  }
+
+  return wrap;
+}
+
+async function testChannel(id) {
+  try {
+    const data = await api('/admin/channels/test', {
+      method: 'POST',
+      body: JSON.stringify({ id })
+    });
+    toast(data.message || `${id} 可用`, 'success');
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    toast(`渠道不可用：${err.message}`, 'error');
+  }
+}
+
+async function toggleChannel(id, enabled) {
+  try {
+    await api('/admin/channels/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ id, enabled })
+    });
+    toast(enabled ? '渠道已启用' : '渠道已停用', 'success');
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function removeChannel(id) {
+  if (!window.confirm(`确定删除渠道 ${id}？该渠道的账号与模型配置会一并移除。`)) return;
+  try {
+    await api('/admin/channels/remove', {
+      method: 'POST',
+      body: JSON.stringify({ id })
+    });
+    toast('渠道已删除', 'success');
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function createChannel() {
+  const id = $('channelIdInput').value.trim();
+  const baseUrl = $('channelBaseInput').value.trim();
+  if (!id || !baseUrl) {
+    toast('请填写渠道 ID 与 Base URL', 'error');
+    return;
+  }
+
+  const button = $('createChannelBtn');
+  setBusy(button, true);
+  setMsg($('channelMsg'), '正在添加渠道…', 'warn');
+
+  try {
+    const data = await api('/admin/channels/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        id,
+        type: 'openai-compatible',
+        label: $('channelLabelInput').value.trim() || id,
+        baseUrl,
+        apiKey: $('channelKeyInput').value.trim(),
+        models: $('channelModelsInput').value
+      })
+    });
+    setMsg($('channelMsg'), `渠道 ${data.channel.label} 已添加`, 'ok');
+    toast('渠道已添加', 'success');
+    $('channelIdInput').value = '';
+    $('channelLabelInput').value = '';
+    $('channelBaseInput').value = '';
+    $('channelKeyInput').value = '';
+    $('channelModelsInput').value = '';
+    $('channelAdd').open = false;
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    setMsg($('channelMsg'), err.message, 'error');
+    toast(err.message, 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+/* ========================================================================== */
+/* connect wizard                                                             */
+/* ========================================================================== */
+
+const STRATEGY_LABEL = {
+  oauth: '一键授权',
+  'open-key': '需 API Key',
+  keyless: '免密'
+};
+
+const STRATEGY_GROUP = [
+  {
+    id: 'oauth',
+    title: '账号渠道',
+    hint: '官方授权，点一下即可'
+  },
+  {
+    id: 'keyless',
+    title: '免密渠道',
+    hint: '无需账号或 Key'
+  },
+  {
+    id: 'open-key',
+    title: 'API Key 渠道',
+    hint: '复制 Key 后自动捕获'
+  }
+];
+
+/** Human-readable authorization kind for the fact sheet. */
+function OAuthKindLabel(oauth) {
+  return (
+    {
+      openrouter: 'OAuth PKCE + 本机回调',
+      workbuddy: '桌面端授权页轮询',
+      cline: 'WorkOS 设备码',
+      qoder: 'PKCE 设备码',
+      'gemini-code-assist': 'Google OAuth + 本机回调',
+      trae: 'PKCE + 本机回调',
+      raccoon: '微信扫码',
+      zcode: '服务端中介设备流',
+      'minimax-code': '设备码 + PKCE',
+      loomy: '短信验证码',
+      lobsterai: '授权码 + 本机回调'
+    }[oauth] || '官方授权'
+  );
+}
+
+function connectInfoFor(id) {
+  return state.connect.find((entry) => entry.id === id) || null;
+}
+
+function renderConnectPresets() {
+  const box = $('connectPresets');
+  if (!box) return;
+  clear(box);
+
+  const query = state.connectQuery.trim().toLowerCase();
+
+  for (const group of STRATEGY_GROUP) {
+    const items = state.connect.filter((entry) => {
+      if (entry.strategy !== group.id) return false;
+      if (!query) return true;
+      return `${entry.id} ${entry.name} ${entry.baseUrl}`.toLowerCase().includes(query);
+    });
+    if (!items.length) continue;
+
+    const section = el('div', 'connect-group');
+    const title = el('div', 'connect-group-title');
+    title.appendChild(document.createTextNode(group.title));
+    title.appendChild(el('em', '', `· ${group.hint} · ${items.length}`));
+    section.appendChild(title);
+
+    const grid = el('div', 'connect-grid');
+    for (const preset of items) {
+      const button = el('button', `connect-item${preset.id === state.connectSelected ? ' is-active' : ''}`);
+      button.type = 'button';
+      button.dataset.preset = preset.id;
+      button.appendChild(el('strong', '', preset.name));
+      const label = STRATEGY_LABEL[preset.strategy] || preset.strategy;
+      button.appendChild(el('span', preset.strategy === 'oauth' ? 'is-oauth-label' : '', label));
+      button.addEventListener('click', () => selectConnect(preset.id));
+      grid.appendChild(button);
+    }
+    section.appendChild(grid);
+    box.appendChild(section);
+  }
+
+  if (!box.childElementCount) {
+    box.appendChild(el('div', 'card empty-state', '没有匹配的服务商'));
+  }
+}
+
+function selectConnect(id) {
+  stopOauthPolling();
+  stopClipboardWatch();
+  state.connectSelected = id;
+  state.clipboardSignature = '';
+  state.oauthState = '';
+  state.oauthProvider = '';
+  state.smsState = '';
+
+  const info = connectInfoFor(id);
+  const panel = $('connectPanel');
+
+  renderConnectPresets();
+  setConnectResult('', null);
+
+  if (!info) {
+    panel.hidden = true;
+    $('connectState').textContent = '待选择';
+    return;
+  }
+
+  panel.hidden = false;
+  $('connectName').textContent = info.name;
+  $('connectNote').textContent = info.note || '';
+  $('connectSubtitle').textContent =
+    info.strategy === 'oauth'
+      ? '账号渠道 · 官方授权'
+      : info.strategy === 'keyless'
+        ? '免密渠道 · 无需账号或 Key'
+        : 'API Key 渠道 · 复制后自动捕获';
+
+  // A compact fact sheet keeps the panel from looking empty and answers the
+  // questions people actually ask before authorizing.
+  const facts = $('connectFacts');
+  if (facts) {
+    clear(facts);
+    const rows = [
+      ['端点', info.baseUrl || '—'],
+      ['授权方式', info.strategy === 'oauth' ? OAuthKindLabel(info.oauth) : STRATEGY_LABEL[info.strategy]],
+      ['需要 Key', info.apiKeyRequired ? '是' : '否']
+    ];
+    if (info.suggestedModels?.length) {
+      rows.push(['示例模型', info.suggestedModels.slice(0, 3).join(' · ')]);
+    }
+    for (const [label, value] of rows) {
+      const row = el('div', 'fact');
+      row.appendChild(el('span', '', label));
+      row.appendChild(el('strong', '', value));
+      facts.appendChild(row);
+    }
+  }
+
+  const strategy = $('connectStrategy');
+  strategy.textContent = STRATEGY_LABEL[info.strategy] || info.strategy;
+  strategy.className = `connect-strategy${info.strategy === 'oauth' ? ' is-oauth' : ''}`;
+
+  const stateLabel = $('connectState');
+  stateLabel.textContent =
+    info.strategy === 'oauth' ? '可一键授权' : info.strategy === 'keyless' ? '免密' : '需 Key';
+  stateLabel.classList.toggle('is-on', info.strategy === 'oauth');
+
+  $('connectStepOauth').hidden = info.strategy !== 'oauth';
+  $('connectStepKey').hidden = info.strategy !== 'open-key';
+  $('connectStepKeyless').hidden = info.strategy !== 'keyless';
+
+  $('oauthState').hidden = true;
+  $('connectDevice').hidden = true;
+  $('connectQr').hidden = true;
+  $('connectSms').hidden = true;
+  $('smsCodeField').hidden = true;
+  $('connectKeyInput').value = '';
+  $('detectLocalBtn').hidden = !info.local;
+  $('openKeyPageBtn').hidden = !info.keyUrl;
+
+  if (info.strategy === 'oauth') {
+    $('oauthHint').textContent = info.note || '点「一键授权」后在浏览器完成登录，凭据会自动写回。';
+    const isSms = info.oauth === 'loomy';
+    const isQr = info.oauth === 'raccoon';
+    $('oauthStartBtn').querySelector('.btn-label').textContent = isSms
+      ? '发送验证码'
+      : isQr
+        ? '生成登录二维码'
+        : '一键授权';
+    $('connectSms').hidden = !isSms;
+  }
+
+  if (info.strategy === 'keyless') {
+    $('keylessHint').textContent = info.local
+      ? '本机运行时：无需账号与 Key。先确认服务已启动，再点「直接添加」。'
+      : `该渠道无需账号与 Key。${info.note || ''}`;
+  }
+}
+
+function setConnectResult(text, kind, { offerStart = false } = {}) {
+  const node = $('connectResult');
+  if (!text) {
+    node.hidden = true;
+    clear(node);
+    node.className = 'connect-result';
+    return;
+  }
+  node.hidden = false;
+  node.className = `connect-result${kind === 'error' ? ' is-error' : ''}`;
+  node.replaceChildren(document.createTextNode(text));
+
+  if (offerStart) {
+    const button = el('button', 'btn primary connect-start', '立即启动网关');
+    button.type = 'button';
+    button.addEventListener('click', startProxy);
+    node.appendChild(button);
+  }
+}
+
+function setOauthState(text, kind, linkUrl) {
+  const node = $('oauthState');
+  if (!text) {
+    node.hidden = true;
+    clear(node);
+    return;
+  }
+  node.hidden = false;
+  node.className = `connect-oauth-state${kind === 'ok' ? ' is-ok' : kind === 'error' ? ' is-error' : ''}`;
+  node.replaceChildren(document.createTextNode(text));
+  if (linkUrl) {
+    node.appendChild(document.createTextNode(' '));
+    const link = el('a', '', '打开授权页');
+    link.href = linkUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    node.appendChild(link);
+  }
+}
+
+function stopOauthPolling() {
+  if (state.oauthTimer) {
+    clearInterval(state.oauthTimer);
+    state.oauthTimer = null;
+  }
+  state.oauthPopup = null;
+  // Invalidate in-flight polls: clearing the timer does not cancel a request
+  // already awaiting a response, and a stale reply must not repaint the panel
+  // after the user switched to another provider.
+  state.oauthGeneration += 1;
+}
+
+function stopClipboardWatch() {
+  if (state.clipboardTimer) {
+    clearInterval(state.clipboardTimer);
+    state.clipboardTimer = null;
+  }
+}
+
+/**
+ * Watch the OS clipboard for a key while the user is on the provider's page.
+ *
+ * The server reads the clipboard (a localhost page cannot always use the async
+ * clipboard API) but only returns a shape-checked candidate.
+ */
+function startClipboardWatch() {
+  stopClipboardWatch();
+  if (!$('autoCaptureInput').checked) return;
+
+  state.clipboardTimer = setInterval(async () => {
+    try {
+      const data = await api('/admin/connect/clipboard');
+      if (!data.candidate) return;
+      if (data.signature === state.clipboardSignature) return;
+
+      state.clipboardSignature = data.signature;
+      if ($('connectKeyInput').value.trim() === data.candidate) return;
+
+      $('connectKeyInput').value = data.candidate;
+      setConnectResult('已从剪贴板读到 Key，正在自动校验…', null);
+      stopClipboardWatch();
+      await verifyAndAddKey({ fromClipboard: true });
+    } catch {
+      /* clipboard unavailable: manual paste still works */
+    }
+  }, 1500);
+}
+
+async function readClipboardIntoField() {
+  try {
+    const data = await api('/admin/connect/clipboard');
+    if (!data.available) {
+      setConnectResult('读取不到剪贴板（可能是权限或平台限制），请手动粘贴。', 'error');
+      return;
+    }
+    if (!data.candidate) {
+      setConnectResult('剪贴板里没有识别到 API Key，请复制 Key 后重试。', 'error');
+      return;
+    }
+    $('connectKeyInput').value = data.candidate;
+    state.clipboardSignature = data.signature;
+    setConnectResult('已读取剪贴板中的 Key，正在校验…', null);
+    await verifyAndAddKey({ fromClipboard: true });
+  } catch (err) {
+    setConnectResult(`读取剪贴板失败：${err.message}`, 'error');
+  }
+}
+
+async function startOauth() {
+  const info = connectInfoFor(state.connectSelected);
+  if (!info?.oauth) return;
+
+  // SMS has no page to open: step 1 is "send the code".
+  if (info.oauth === 'loomy') return sendSmsCode(info);
+
+  // WorkBuddy-family providers use the channel's own browser login, not the
+  // generic OAuth registry.
+  if (info.oauth === 'workbuddy') return startWorkbuddyFamilyLogin(info);
+
+  const isQr = info.oauth === 'raccoon';
+
+  // Open the popup synchronously so the browser treats it as a user gesture.
+  let popup = null;
+  if (!isQr) {
+    try {
+      popup = window.open('about:blank', '_blank');
+    } catch {
+      popup = null;
+    }
+  }
+
+  const button = $('oauthStartBtn');
+  setBusy(button, true);
+  setConnectResult('', null);
+  $('connectDevice').hidden = true;
+  $('connectQr').hidden = true;
+  setOauthState('正在创建授权会话…', 'pending');
+
+  const generation = state.oauthGeneration;
+
+  try {
+    const data = await api('/admin/connect/oauth/start', {
+      method: 'POST',
+      body: JSON.stringify({ provider: info.oauth, channelId: info.id, label: 'Buddy2API' })
+    });
+
+    if (generation !== state.oauthGeneration) {
+      try {
+        popup?.close();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    setBusy(button, false);
+
+    if (data.mode === 'device-code' && data.userCode) {
+      $('connectDevice').hidden = false;
+      $('connectUserCode').textContent = data.userCode;
+      setOauthState('已打开授权页。确认设备码一致后完成登录，本页会自动继续。', 'pending', data.authUrl);
+      if (popup && data.authUrl) popup.location.href = data.authUrl;
+    } else if (data.mode === 'qr' && data.qrPayload) {
+      renderQr(data.qrSvg);
+      setOauthState('二维码已生成，请用微信扫码登录。', 'pending');
+    } else if (popup && data.authUrl) {
+      popup.location.href = data.authUrl;
+      setOauthState('等待浏览器完成授权… 完成后会自动写入凭据。', 'pending');
+    } else if (data.authUrl) {
+      setOauthState('浏览器拦截了新窗口，请手动打开授权页。', 'pending', data.authUrl);
+    }
+
+    state.oauthPopup = popup;
+    state.oauthProvider = info.oauth;
+    state.oauthState = data.state;
+    pollOauth(info, data.state);
+  } catch (err) {
+    try {
+      popup?.close();
+    } catch {
+      /* ignore */
+    }
+    setOauthState(`发起授权失败：${err.message}`, 'error');
+    setBusy(button, false);
+  }
+}
+
+/**
+ * WorkBuddy-family browser login (WorkBuddy / CodeBuddy).
+ *
+ * These channels own their login handshake, so the wizard delegates to the
+ * channel's `/admin/login/*` endpoints instead of the OAuth registry.
+ */
+async function startWorkbuddyFamilyLogin(info) {
+  let popup = null;
+  try {
+    popup = window.open('about:blank', '_blank');
+  } catch {
+    popup = null;
+  }
+
+  const button = $('oauthStartBtn');
+  setBusy(button, true);
+  setConnectResult('', null);
+  $('connectDevice').hidden = true;
+  $('connectQr').hidden = true;
+  setOauthState('正在创建登录会话…', 'pending');
+
+  try {
+    // Ensure the channel exists so its login endpoint has something to target.
+    const existing = activeChannels().find((channel) => channel.id === info.id);
+    if (!existing) {
+      await api('/admin/channels/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: info.id,
+          type: 'codebuddy',
+          label: info.name,
+          baseUrl: info.baseUrl,
+          models: (info.suggestedModels || []).join('\n')
+        })
+      });
+      await refreshStatus({ silent: true });
+    }
+
+    const data = await api('/admin/login/start', {
+      method: 'POST',
+      body: JSON.stringify({ channel: info.id, accountId: 'primary' })
+    });
+
+    setBusy(button, false);
+
+    if (popup && data.authUrl) {
+      popup.location.href = data.authUrl;
+      setOauthState('等待浏览器完成授权… 完成后会自动写入凭据。', 'pending');
+    } else if (data.authUrl) {
+      setOauthState('浏览器拦截了新窗口，请手动打开授权页。', 'pending', data.authUrl);
+    }
+
+    state.oauthPopup = popup;
+    pollWorkbuddyFamilyLogin(info, data.state);
+  } catch (err) {
+    try {
+      popup?.close();
+    } catch {
+      /* ignore */
+    }
+    setOauthState(`发起授权失败：${err.message}`, 'error');
+    setBusy(button, false);
+  }
+}
+
+function pollWorkbuddyFamilyLogin(info, loginState) {
+  stopOauthPolling();
+  const generation = state.oauthGeneration;
+  const isStale = () => generation !== state.oauthGeneration;
+  let attempts = 0;
+
+  state.oauthTimer = setInterval(async () => {
+    if (isStale()) return;
+    attempts += 1;
+    if (attempts > 150) {
+      stopOauthPolling();
+      setOauthState('授权超时，请重试', 'error');
+      setBusy($('oauthStartBtn'), false);
+      return;
+    }
+
+    try {
+      const data = await api(
+        `/admin/login/status?state=${encodeURIComponent(loginState)}&channel=${encodeURIComponent(info.id)}`
+      );
+      if (isStale()) return;
+
+      if (data.status === 'success') {
+        stopOauthPolling();
+        setBusy($('oauthStartBtn'), false);
+        const who = data.user?.username || data.user?.email || '账号';
+        setOauthState(`授权完成：${who}`, 'ok');
+        setConnectResult(`${info.name} 已连接。`, null, { offerStart: true });
+        try {
+          state.oauthPopup?.close();
+        } catch {
+          /* ignore */
+        }
+        await refreshStatus({ silent: true });
+        await loadModels();
+        return;
+      }
+
+      if (data.status === 'error') {
+        stopOauthPolling();
+        setBusy($('oauthStartBtn'), false);
+        setOauthState(data.error || '授权失败', 'error');
+      }
+    } catch (err) {
+      if (isStale()) return;
+      stopOauthPolling();
+      setBusy($('oauthStartBtn'), false);
+      setOauthState(err.message, 'error');
+    }
+  }, 2000);
+}
+
+async function sendSmsCode(info) {  const phone = $('connectPhoneInput').value.trim();
+  if (!phone) {
+    setMsg($('smsMsg'), '请填写手机号', 'error');
+    return;
+  }
+
+  const button = $('oauthStartBtn');
+  setBusy(button, true);
+  setMsg($('smsMsg'), '正在发送…', 'warn');
+  setConnectResult('', null);
+
+  try {
+    const data = await api('/admin/connect/oauth/start', {
+      method: 'POST',
+      body: JSON.stringify({ provider: info.oauth, channelId: info.id, phone })
+    });
+    state.oauthProvider = info.oauth;
+    state.oauthState = data.state;
+    $('smsCodeField').hidden = false;
+    setMsg($('smsMsg'), '验证码已发送', 'ok');
+    $('connectSmsCode').focus();
+    pollOauth(info, data.state);
+  } catch (err) {
+    setMsg($('smsMsg'), err.message, 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function submitSmsCode() {
+  const info = connectInfoFor(state.connectSelected);
+  if (!info?.oauth || !state.oauthState) return;
+  const code = $('connectSmsCode').value.trim();
+  if (!code) {
+    setMsg($('smsMsg'), '请填写验证码', 'error');
+    return;
+  }
+
+  const button = $('submitSmsBtn');
+  setBusy(button, true);
+  setMsg($('smsMsg'), '正在验证…', 'warn');
+
+  try {
+    await api('/admin/connect/oauth/submit', {
+      method: 'POST',
+      body: JSON.stringify({ provider: info.oauth, state: state.oauthState, code })
+    });
+    setMsg($('smsMsg'), '验证成功', 'ok');
+    $('connectSmsCode').value = '';
+  } catch (err) {
+    setMsg($('smsMsg'), err.message, 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+/** Render the login QR locally; the payload never leaves this machine. */
+function renderQr(svg) {
+  const box = $('connectQrImage');
+  $('connectQr').hidden = false;
+  clear(box);
+  if (svg) {
+    // Server-rendered so the pending login code stays on this machine.
+    box.innerHTML = svg;
+    return;
+  }
+  box.appendChild(el('div', 'connect-qr-hint', '二维码渲染失败，请刷新重试'));
+}
+
+function pollOauth(info, oauthState) {
+  stopOauthPolling();
+  const generation = state.oauthGeneration;
+  const isStale = () => generation !== state.oauthGeneration;
+  let attempts = 0;
+
+  state.oauthTimer = setInterval(async () => {
+    if (isStale()) return;
+    attempts += 1;
+    if (attempts > 200) {
+      stopOauthPolling();
+      setOauthState('授权超时，请重试', 'error');
+      setBusy($('oauthStartBtn'), false);
+      return;
+    }
+
+    try {
+      const data = await api(
+        `/admin/connect/oauth/status?provider=${encodeURIComponent(info.oauth)}&state=${encodeURIComponent(oauthState)}`
+      );
+      if (isStale()) return;
+
+      if (data.status === 'success') {
+        stopOauthPolling();
+        setBusy($('oauthStartBtn'), false);
+        setOauthState(data.message, 'ok');
+        setConnectResult(
+          `${data.channelLabel || data.channel} 已连接${data.account?.username ? `（${data.account.username}）` : ''}。`,
+          null,
+          { offerStart: true }
+        );
+        try {
+          state.oauthPopup?.close();
+        } catch {
+          /* ignore */
+        }
+        await refreshStatus({ silent: true });
+        await loadModels();
+        return;
+      }
+
+      if (data.status === 'error') {
+        stopOauthPolling();
+        setBusy($('oauthStartBtn'), false);
+        setOauthState(data.error || '授权失败', 'error');
+        $('connectQr').hidden = true;
+        $('connectDevice').hidden = true;
+        return;
+      }
+
+      if (data.status === 'pending' && data.qrSvg) renderQr(data.qrSvg);
+    } catch (err) {
+      if (isStale()) return;
+      stopOauthPolling();
+      setBusy($('oauthStartBtn'), false);
+      setOauthState(err.message, 'error');
+    }
+  }, 1500);
+}
+
+async function verifyAndAddKey({ fromClipboard = false } = {}) {
+  const info = connectInfoFor(state.connectSelected);
+  if (!info) return;
+
+  const apiKey = $('connectKeyInput').value.trim();
+  if (!apiKey) {
+    setConnectResult('请先粘贴 API Key', 'error');
+    return;
+  }
+
+  stopClipboardWatch();
+  const button = $('verifyKeyBtn');
+  setBusy(button, true);
+  setConnectResult('正在用真实对话端点校验这个 Key…', null);
+
+  try {
+    const verified = await api('/admin/connect/verify', {
+      method: 'POST',
+      body: JSON.stringify({ preset: info.id, apiKey, baseUrl: info.baseUrl })
+    });
+
+    await createChannelFromPreset(info, apiKey, verified.models);
+    setConnectResult(verified.message, null, { offerStart: true });
+    $('connectKeyInput').value = '';
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    setConnectResult(
+      fromClipboard ? `剪贴板里的内容没能通过校验：${err.message}` : `校验失败：${err.message}`,
+      'error'
+    );
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function addKeylessChannel() {
+  const info = connectInfoFor(state.connectSelected);
+  if (!info) return;
+
+  const button = $('addKeylessBtn');
+  setBusy(button, true);
+  setConnectResult('正在添加渠道…', null);
+
+  try {
+    let models = info.suggestedModels || [];
+    if (info.local) {
+      const detected = await api(`/admin/connect/local?preset=${encodeURIComponent(info.id)}`);
+      if (!detected.running) throw new Error('本机没有检测到该服务，请先启动它');
+      models = detected.models?.length ? detected.models : models;
+    }
+
+    await createChannelFromPreset(info, '', models);
+    setConnectResult(
+      `${info.name} 已添加${models.length ? `，${models.length} 个模型` : ''}。`,
+      null,
+      { offerStart: true }
+    );
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    setConnectResult(err.message, 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function createChannelFromPreset(info, apiKey, models) {
+  const existing = activeChannels().find((channel) => channel.id === info.id);
+  const list = (models || []).join('\n');
+
+  if (existing) {
+    await api('/admin/channels/update', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: info.id,
+        label: info.name,
+        options: { baseUrl: info.baseUrl, apiKey, preset: info.id, models: list.split('\n').filter(Boolean) }
+      })
+    });
+    return;
+  }
+
+  await api('/admin/channels/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: info.id,
+      type: 'openai-compatible',
+      label: info.name,
+      baseUrl: info.baseUrl,
+      apiKey,
+      preset: info.id,
+      models: list
+    })
+  });
+}
+
+async function detectLocalService() {
+  const info = connectInfoFor(state.connectSelected);
+  if (!info) return;
+
+  const button = $('detectLocalBtn');
+  setBusy(button, true);
+  try {
+    const data = await api(`/admin/connect/local?preset=${encodeURIComponent(info.id)}`);
+    if (data.running) {
+      setConnectResult(
+        `检测到本机服务，${data.models?.length || 0} 个模型：${(data.models || []).slice(0, 5).join(', ')}`,
+        null
+      );
+    } else {
+      setConnectResult('本机没有检测到该服务，请先启动它。', 'error');
+    }
+  } catch (err) {
+    setConnectResult(err.message, 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function loadConnectPresets() {
+  const list = state.status?.connect || [];
+  if (!list.length) return;
+
+  // Only rebuild when the catalogue changed; a status poll must not reset the
+  // selected provider or interrupt an in-flight authorization.
+  const signature = list.map((entry) => `${entry.id}:${entry.strategy}`).join('|');
+  if (signature === state.connectSignature) return;
+  state.connectSignature = signature;
+  state.connect = list;
+
+  renderConnectPresets();
+  if (!state.connectSelected) {
+    const preferred = list.find((entry) => entry.strategy === 'oauth') || list[0];
+    selectConnect(preferred.id);
+  } else {
+    selectConnect(state.connectSelected);
+  }
+}
+
+/* ========================================================================== */
+/* accounts                                                                   */
+/* ========================================================================== */
+
+function updateTokenPreview() {
+  const text = $('tokenInput').value;
+  const chips = $('parsedChips');
+  const tokens = findTokens(text);
+  clear(chips);
+
+  if (!tokens.length) {
+    chips.hidden = true;
+    $('saveBtn').disabled = !text.trim();
+    return;
+  }
+
+  chips.hidden = false;
+  for (const item of tokens) {
+    const chip = el('span', 'chip');
+    const label = item.kind === 'refresh' ? '刷新令牌' : '访问令牌';
+    chip.textContent = item.exp
+      ? `${label} · ${new Date(item.exp * 1000).toLocaleDateString('zh-CN')} 到期`
+      : label;
+    chips.appendChild(chip);
+  }
+  $('saveBtn').disabled = false;
+}
 
 async function saveCredentials() {
   const source = $('tokenInput').value.trim();
@@ -864,7 +1777,7 @@ async function saveCredentials() {
     return;
   }
 
-  const payload = { source };
+  const payload = { source, channel: loginChannelStatus()?.id };
   const deviceToken = $('deviceInput').value.trim();
   const userId = $('userInput').value.trim();
   if (deviceToken) payload.deviceToken = deviceToken;
@@ -885,7 +1798,7 @@ async function saveCredentials() {
     updateTokenPreview();
     state.modelTouched = false;
 
-    await refreshStatus();
+    await refreshStatus({ silent: true });
     await loadModels();
   } catch (err) {
     setMsg($('credMsg'), err.message, 'error');
@@ -897,144 +1810,96 @@ async function saveCredentials() {
 }
 
 function setLoginFeedback(message, kind = 'pending', linkUrl = null) {
-  const el = $('loginFeedback');
-  el.hidden = false;
-  el.className = `login-feedback is-${kind}`;
-  el.replaceChildren();
-  el.appendChild(document.createTextNode(message));
+  const node = $('loginFeedback');
+  node.hidden = false;
+  node.className = `login-feedback is-${kind}`;
+  node.replaceChildren(document.createTextNode(message));
   if (linkUrl) {
-    el.appendChild(document.createTextNode(' '));
-    const link = document.createElement('a');
+    node.appendChild(document.createTextNode(' '));
+    const link = el('a', '', '打开授权页');
     link.href = linkUrl;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
-    link.textContent = '打开授权页';
     link.style.color = 'inherit';
     link.style.textDecoration = 'underline';
-    el.appendChild(link);
+    node.appendChild(link);
   }
 }
 
 function renderLoginAccount(user) {
-  const el = $('loginAccount');
+  const node = $('loginAccount');
+  if (!node) return;
   if (!user) {
-    el.hidden = true;
-    el.replaceChildren();
+    node.hidden = true;
+    clear(node);
     return;
   }
-  el.hidden = false;
-  el.replaceChildren();
+  node.hidden = false;
+  clear(node);
 
-  const avatar = document.createElement('span');
-  avatar.className = 'avatar';
-  avatar.textContent = String(user.username || user.email || '?').slice(0, 1).toUpperCase();
-
-  const who = document.createElement('div');
-  who.className = 'who';
-  const name = document.createElement('span');
-  name.className = 'name';
-  name.textContent = user.username || user.email || '已连接';
-  who.appendChild(name);
-  if (user.email && user.email !== name.textContent) {
-    const email = document.createElement('span');
-    email.className = 'email';
-    email.textContent = user.email;
-    who.appendChild(email);
-  }
-
-  el.append(avatar, who);
+  const avatar = el('span', 'avatar', String(user.username || user.email || '?').slice(0, 1).toUpperCase());
+  const who = el('div', 'who');
+  who.appendChild(el('span', 'name', user.username || user.email || '已连接'));
+  if (user.email && user.email !== user.username) who.appendChild(el('span', 'email', user.email));
+  node.append(avatar, who);
 }
 
 function renderAccounts(accounts) {
   const list = $('accountList');
-  list.replaceChildren();
+  if (!list) return;
+  clear(list);
 
   if (!accounts.length) {
-    const empty = document.createElement('div');
-    empty.className = 'account-empty';
-    empty.textContent = '暂无账号';
-    list.appendChild(empty);
+    list.appendChild(el('div', 'empty-state', '暂无账号'));
     return;
   }
 
   for (const account of accounts) {
-    const row = document.createElement('div');
-    row.className = 'account-row';
-    if (account.enabled === false) row.classList.add('is-disabled');
-    if (account.coolingDown) row.classList.add('is-cooling');
+    const row = el('div', `account-row${account.enabled === false ? ' is-disabled' : ''}${account.coolingDown ? ' is-cooling' : ''}`);
 
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar';
-    avatar.textContent = String(account.username || account.email || account.label || '?')
-      .slice(0, 1)
-      .toUpperCase();
+    const avatar = el(
+      'div',
+      'avatar',
+      String(account.username || account.email || account.label || '?').slice(0, 1).toUpperCase()
+    );
 
-    const who = document.createElement('div');
-    who.className = 'who';
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = account.username || account.label || account.id;
-    who.appendChild(name);
+    const who = el('div', 'who');
+    who.appendChild(el('span', 'name', account.username || account.label || account.id));
 
     const metaParts = [];
-    if (account.email && account.email !== name.textContent) metaParts.push(account.email);
+    if (account.channelLabel) metaParts.push(account.channelLabel);
+    if (account.email && account.email !== account.username) metaParts.push(account.email);
     metaParts.push(`并发 ${account.load ?? 0}/${account.maxConcurrency ?? 1}`);
     if (account.sessions) metaParts.push(`会话 ${account.sessions}`);
-    if (account.expiresAt) {
-      metaParts.push(`到期 ${new Date(account.expiresAt).toLocaleDateString('zh-CN')}`);
-    }
-    const meta = document.createElement('span');
-    meta.className = 'meta';
-    meta.textContent = metaParts.join(' · ');
-    who.appendChild(meta);
+    if (account.expiresAt) metaParts.push(`到期 ${new Date(account.expiresAt).toLocaleDateString('zh-CN')}`);
+    who.appendChild(el('span', 'meta', metaParts.join(' · ')));
 
-    const badges = document.createElement('div');
-    badges.className = 'account-badges';
-    if (account.isPrimary) {
-      const badge = document.createElement('span');
-      badge.className = 'account-badge primary';
-      badge.textContent = '主账号';
-      badges.appendChild(badge);
-    }
-    if (account.coolingDown) {
-      const badge = document.createElement('span');
-      badge.className = 'account-badge cooling';
-      badge.textContent = '冷却中';
-      badges.appendChild(badge);
-    }
-    if (account.enabled === false) {
-      const badge = document.createElement('span');
-      badge.className = 'account-badge off';
-      badge.textContent = '已停用';
-      badges.appendChild(badge);
-    }
+    const badges = el('div', 'account-badges');
+    if (account.isPrimary) badges.appendChild(el('span', 'account-badge primary', '主账号'));
+    if (account.coolingDown) badges.appendChild(el('span', 'account-badge cooling', '冷却中'));
+    if (account.enabled === false) badges.appendChild(el('span', 'account-badge off', '已停用'));
     if (badges.childElementCount) who.appendChild(badges);
 
-    const actions = document.createElement('div');
-    actions.className = 'account-actions';
+    const actions = el('div', 'account-actions');
 
-    const login = document.createElement('button');
-    login.type = 'button';
-    login.className = 'ghost mini';
-    login.textContent = '登录';
-    login.title = '重新走一次 WorkBuddy 授权';
-    login.disabled = state.loginBusy;
-    login.addEventListener('click', () => startLogin({ accountId: account.id }));
-    actions.appendChild(login);
+    if (!account.channel || account.channel === 'workbuddy') {
+      const login = el('button', 'ghost mini', '登录');
+      login.type = 'button';
+      login.title = '重新走一次 WorkBuddy 授权';
+      login.disabled = state.loginBusy;
+      login.addEventListener('click', () => startLogin({ accountId: account.id }));
+      actions.appendChild(login);
+    }
 
-    const toggle = document.createElement('button');
+    const toggle = el('button', 'ghost mini', account.enabled === false ? '启用' : '停用');
     toggle.type = 'button';
-    toggle.className = 'ghost mini';
-    toggle.textContent = account.enabled === false ? '启用' : '停用';
     toggle.disabled = state.loginBusy;
     toggle.addEventListener('click', () => toggleAccount(account.id, account.enabled === false));
     actions.appendChild(toggle);
 
     if (!account.isPrimary) {
-      const remove = document.createElement('button');
+      const remove = el('button', 'ghost mini danger', '删除');
       remove.type = 'button';
-      remove.className = 'ghost mini danger';
-      remove.textContent = '删除';
       remove.disabled = state.loginBusy;
       remove.addEventListener('click', () => removeAccount(account.id));
       actions.appendChild(remove);
@@ -1050,10 +1915,10 @@ async function toggleAccount(id, enabled) {
   try {
     await api('/admin/accounts/toggle', {
       method: 'POST',
-      body: JSON.stringify({ id, enabled })
+      body: JSON.stringify({ id, enabled, channel: loginChannelStatus()?.id })
     });
     toast(enabled ? '账号已启用' : '账号已停用', 'success');
-    await refreshStatus();
+    await refreshStatus({ silent: true });
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -1065,10 +1930,10 @@ async function removeAccount(id) {
   try {
     await api('/admin/accounts/remove', {
       method: 'POST',
-      body: JSON.stringify({ id })
+      body: JSON.stringify({ id, channel: loginChannelStatus()?.id })
     });
     toast('账号已删除', 'success');
-    await refreshStatus();
+    await refreshStatus({ silent: true });
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -1083,11 +1948,11 @@ function finishLoginError(message) {
   const button = $('loginBtn');
   setBusy(button, false);
   button.disabled = false;
-  button.querySelector('.btn-label').textContent = state.status?.user
+  button.querySelector('.btn-label').textContent = loginChannelStatus()?.user
     ? '重新登录 / 切换账号'
     : '使用 WorkBuddy 账号登录';
   $('addAccountBtn').disabled = false;
-  renderAccounts(state.status?.accounts || []);
+  renderAccounts(loginChannelStatus()?.accounts || []);
   setLoginFeedback(message, 'error');
   toast(message, 'error');
 }
@@ -1129,13 +1994,13 @@ function pollLogin(loginState, popup, target = {}) {
           data.warning ? `${action}，但${data.warning}` : `${action}：${who}，token 已自动更新`,
           data.warning ? 'pending' : 'success'
         );
-        toast(target.createNew ? '账号已添加' : '账号登录成功，token 已自动更新', data.warning ? 'warn' : 'success');
+        toast(target.createNew ? '账号已添加' : '账号登录成功', data.warning ? 'warn' : 'success');
         try {
           popup?.close();
         } catch {
           /* ignore */
         }
-        await refreshStatus();
+        await refreshStatus({ silent: true });
         await loadModels();
         return;
       }
@@ -1167,7 +2032,7 @@ async function startLogin(target = {}) {
   setBusy(button, true);
   button.querySelector('.btn-label').textContent = '正在打开授权页…';
   $('addAccountBtn').disabled = true;
-  renderAccounts(state.status?.accounts || []);
+  renderAccounts(loginChannelStatus()?.accounts || []);
   setLoginFeedback(
     target.createNew ? '正在添加账号，请完成浏览器授权…' : '正在创建登录会话…',
     'pending'
@@ -1176,27 +2041,29 @@ async function startLogin(target = {}) {
   try {
     const data = await api('/admin/login/start', {
       method: 'POST',
-      body: JSON.stringify(target)
+      body: JSON.stringify({ ...target, channel: loginChannelStatus()?.id })
     });
     if (popup) {
       popup.location.href = data.authUrl;
       setLoginFeedback('等待浏览器授权… 完成登录后会自动更新', 'pending');
     } else {
-      setLoginFeedback('浏览器拦截了新窗口，请点击“打开授权页”完成登录。', 'pending', data.authUrl);
+      setLoginFeedback('浏览器拦截了新窗口，请点击「打开授权页」完成登录。', 'pending', data.authUrl);
     }
     pollLogin(data.state, popup, target);
   } catch (err) {
-    if (popup) {
-      try {
-        popup.close();
-      } catch {
-        /* ignore */
-      }
+    try {
+      popup?.close();
+    } catch {
+      /* ignore */
     }
     if (/设备|device/i.test(err.message)) $('manualToken').open = true;
     finishLoginError(err.message);
   }
 }
+
+/* ========================================================================== */
+/* gateway                                                                    */
+/* ========================================================================== */
 
 async function generateKey(showToast = true) {
   try {
@@ -1204,7 +2071,7 @@ async function generateKey(showToast = true) {
     $('keyInput').value = data.apiKey;
     state.lastServerKey = data.apiKey;
     if (showToast) toast('已生成新的 API Key', 'success');
-    if (state.status?.running) await refreshStatus();
+    if (state.status?.running) await refreshStatus({ silent: true });
   } catch (err) {
     toast(`生成 Key 失败：${err.message}`, 'error');
   }
@@ -1212,14 +2079,19 @@ async function generateKey(showToast = true) {
 
 async function startProxy() {
   const button = $('startBtn');
-  const defaultModel = state.modelSelect?.getValue();
+
+  // The wizard's one-click button can fire before the picker has a value, so
+  // fall back to the configured default (or the first listed model).
+  if (!state.models.length && isConfigured()) await loadModels();
+  let defaultModel = state.modelSelect?.getValue() || '';
+  if (!defaultModel) defaultModel = state.status?.defaultModel || state.models[0]?.id || '';
   if (!defaultModel) {
     toast('请选择默认模型', 'error');
     return;
   }
 
   setBusy(button, true);
-  setMsg($('startMsg'), '正在校验凭据并启动…', 'warn');
+  setMsg($('startMsg'), '正在校验渠道并启动…', 'warn');
 
   try {
     const data = await api('/admin/start', {
@@ -1234,86 +2106,95 @@ async function startProxy() {
     state.lastServerKey = data.apiKey;
     state.modelTouched = false;
     state.contextTouched = false;
-    setMsg($('startMsg'), `反代已启动，共 ${data.modelCount ?? '—'} 个可用模型`, 'ok');
-    toast('反代已启动', 'success');
-    await refreshStatus();
+    const note = data.fellBack
+      ? `网关已启动，但原默认模型不可用，已切换到 ${data.defaultModel}`
+      : `网关已启动，共 ${data.modelCount ?? '—'} 个可用模型`;
+    setMsg($('startMsg'), note, data.fellBack ? 'warn' : 'ok');
+    toast(data.fellBack ? note : '网关已启动', data.fellBack ? 'warn' : 'success');
+    await refreshStatus({ silent: true });
     await loadLogs();
-    if (window.innerWidth < 960) {
-      $('cardOutput').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
   } catch (err) {
     setMsg($('startMsg'), err.message, 'error');
     toast(err.message, 'error');
   } finally {
     setBusy(button, false);
-    button.disabled = !(state.status?.user || state.status?.token?.expiresAt);
+    button.disabled = !isConfigured();
   }
 }
 
 async function stopProxy() {
   try {
     await api('/admin/stop', { method: 'POST' });
-    toast('反代已停止', 'info');
-    await refreshStatus();
+    toast('网关已停止', 'info');
+    await refreshStatus({ silent: true });
   } catch (err) {
     toast(`停止失败：${err.message}`, 'error');
   }
 }
 
-// ---------------------------------------------------------------------------
-// logs
-// ---------------------------------------------------------------------------
+/* ========================================================================== */
+/* logs                                                                       */
+/* ========================================================================== */
 
-function renderLogs(logs) {
-  const list = $('logList');
-  if (!logs.length) {
-    list.replaceChildren();
-    const empty = document.createElement('div');
-    empty.className = 'log-empty';
-    empty.textContent = '暂无请求，启动后在这里查看调用记录';
-    list.appendChild(empty);
+function logPassesFilter(row, filter) {
+  if (filter === 'ok') return row.status < 400 && !row.error;
+  if (filter === 'error') return row.status >= 400 || Boolean(row.error);
+  return true;
+}
+
+function buildLogRow(row) {
+  const node = el('div', 'log-row');
+
+  node.appendChild(el('span', 'log-time', formatTime(row.at)));
+
+  const model = el('span', 'log-model');
+  model.appendChild(document.createTextNode(row.model || '—'));
+  if (row.channel) {
+    const small = el('small', '', ` ${row.channel}`);
+    model.appendChild(small);
+  }
+  node.appendChild(model);
+
+  const status = el(
+    'span',
+    `log-status${row.status >= 500 ? ' bad' : row.status >= 400 ? ' warn' : ''}`,
+    String(row.status)
+  );
+  node.appendChild(status);
+
+  node.appendChild(
+    el(
+      'span',
+      'log-duration',
+      row.durationMs >= 1000 ? `${(row.durationMs / 1000).toFixed(1)}s` : `${row.durationMs}ms`
+    )
+  );
+
+  const tokens = row.promptTokens || row.completionTokens
+    ? `${formatNumber(row.promptTokens ?? 0)}/${formatNumber(row.completionTokens ?? 0)}`
+    : '—';
+  node.appendChild(el('span', 'log-tokens', tokens));
+
+  if (row.error) node.title = row.error;
+  return node;
+}
+
+function renderLogs(logs, targetId, filter) {
+  const list = $(targetId);
+  if (!list) return;
+  const rows = logs.filter((row) => logPassesFilter(row, filter || 'all'));
+  clear(list);
+
+  if (!rows.length) {
+    list.appendChild(
+      el('div', 'empty-state', logs.length ? '没有符合条件的记录' : '暂无请求，启动网关后在这里查看调用记录')
+    );
     return;
   }
 
   const fragment = document.createDocumentFragment();
-  for (const entry of logs) {
-    const row = document.createElement('div');
-    row.className = 'log-row';
-    const titleParts = [];
-    if (entry.error) titleParts.push(entry.error);
-    if (entry.account) titleParts.push(`账号 ${entry.account}`);
-    if (entry.ttfbMs != null) titleParts.push(`首包 ${entry.ttfbMs}ms`);
-    titleParts.push(`总耗时 ${entry.durationMs}ms`);
-    row.title = titleParts.join(' · ');
-
-    const time = document.createElement('span');
-    time.className = 't';
-    time.textContent = new Date(entry.at).toLocaleTimeString('zh-CN', { hour12: false });
-    row.appendChild(time);
-
-    const kind = document.createElement('span');
-    kind.className = `kind-badge${entry.kind === 'messages' ? ' anthropic' : ''}`;
-    kind.textContent = entry.kind === 'messages' ? 'CLAUDE' : 'OPENAI';
-    row.appendChild(kind);
-
-    const model = document.createElement('span');
-    model.className = 'm';
-    model.textContent = entry.model + (entry.stream ? ' · stream' : '');
-    row.appendChild(model);
-
-    const status = document.createElement('span');
-    status.className = `s${entry.status >= 500 ? ' bad' : entry.status >= 400 ? ' warn' : ''}`;
-    status.textContent = String(entry.status);
-    row.appendChild(status);
-
-    const duration = document.createElement('span');
-    duration.className = 'd';
-    duration.textContent = entry.durationMs >= 1000 ? `${(entry.durationMs / 1000).toFixed(1)}s` : `${entry.durationMs}ms`;
-    row.appendChild(duration);
-
-    fragment.appendChild(row);
-  }
-  list.replaceChildren(fragment);
+  for (const row of rows) fragment.appendChild(buildLogRow(row));
+  list.appendChild(fragment);
 }
 
 async function loadLogs() {
@@ -1323,19 +2204,321 @@ async function loadLogs() {
     const signature = logs.length ? `${logs[0].at}-${logs.length}` : '0';
     if (signature === state.logsSignature) return;
     state.logsSignature = signature;
-    renderLogs(logs);
+    state.logs = logs;
+
+    renderLogs(logs, 'recentLogList', 'all');
+    renderLogs(logs, 'logList', state.logFilter || 'all');
+    $('recentMeta').textContent = logs.length
+      ? `${logs.length} 条记录 · 最近 ${formatTime(logs[0].at)}`
+      : '暂无请求';
   } catch {
-    /* silent: status polling will surface connection problems */
+    /* silent: status polling surfaces connection problems */
   }
 }
 
-// ---------------------------------------------------------------------------
-// wiring
-// ---------------------------------------------------------------------------
+/* ========================================================================== */
+/* settings                                                                   */
+/* ========================================================================== */
+
+function renderSettings() {
+  const s = state.status;
+  if (!s) return;
+  const routing = s.globalRouting || {};
+  const config = s.config || {};
+
+  if ($('namespaceSelect')) {
+    $('namespaceSelect').value = ['always', 'never'].includes(routing.namespace) ? routing.namespace : 'auto';
+  }
+  if ($('routingDefaultInput') && document.activeElement !== $('routingDefaultInput')) {
+    $('routingDefaultInput').value = routing.defaultModel || s.defaultModel || '';
+  }
+  if ($('exposeUnprefixedInput')) {
+    $('exposeUnprefixedInput').checked = Boolean(routing.exposeUnprefixed);
+  }
+  if ($('infoConfig')) $('infoConfig').textContent = config.configPath || '—';
+  if ($('infoHost')) $('infoHost').textContent = `${config.host || '—'}:${config.port ?? '—'}`;
+  if ($('infoAuth')) $('infoAuth').textContent = config.authEnabled ? '已启用 API Key' : '未启用（仅本机）';
+  if ($('infoChannels')) $('infoChannels').textContent = String(activeChannels().length);
+}
+
+async function saveRouting() {
+  const button = $('saveRoutingBtn');
+  setBusy(button, true);
+  setMsg($('routingMsg'), '正在保存…', 'warn');
+  try {
+    await api('/admin/routing/update', {
+      method: 'POST',
+      body: JSON.stringify({
+        namespace: $('namespaceSelect').value,
+        defaultModel: $('routingDefaultInput').value.trim(),
+        exposeUnprefixed: $('exposeUnprefixedInput').checked
+      })
+    });
+    setMsg($('routingMsg'), '已保存', 'ok');
+    toast('路由设置已保存', 'success');
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    setMsg($('routingMsg'), err.message, 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function reloadConfig() {
+  const button = $('reloadConfigBtn');
+  setBusy(button, true);
+  setMsg($('reloadMsg'), '正在重新读取…', 'warn');
+  try {
+    await api('/admin/reload', { method: 'POST' });
+    setMsg($('reloadMsg'), '已重新读取（监听端口变更需重启进程）', 'ok');
+    await refreshStatus({ silent: true });
+    await loadModels();
+  } catch (err) {
+    setMsg($('reloadMsg'), err.message, 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+/* ========================================================================== */
+/* custom select                                                              */
+/* ========================================================================== */
+
+class CustomSelect {
+  constructor(root, { searchable = false, onChange } = {}) {
+    this.root = root;
+    this.searchable = searchable;
+    this.onChange = onChange;
+    this.options = [];
+    this.value = '';
+    this.open = false;
+    this.disabled = false;
+
+    root.classList.add('cselect');
+    root.replaceChildren();
+
+    this.trigger = el('button', 'cselect-trigger');
+    this.trigger.type = 'button';
+    this.trigger.setAttribute('aria-haspopup', 'listbox');
+    this.trigger.setAttribute('aria-expanded', 'false');
+
+    this.valueNode = el('span', 'cselect-value is-placeholder');
+    this.trigger.appendChild(this.valueNode);
+    this.trigger.appendChild(el('span', 'cselect-caret'));
+    root.appendChild(this.trigger);
+
+    this.trigger.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.toggle();
+    });
+
+    document.addEventListener('click', () => this.close());
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.close();
+    });
+  }
+
+  setOptions(options) {
+    this.options = options || [];
+    if (this.value && !this.hasValue(this.value)) this.value = '';
+    this.renderValue();
+    if (this.open) this.renderPanel();
+  }
+
+  setValue(value) {
+    const next = String(value ?? '');
+    if (next === this.value) return;
+    this.value = next;
+    this.renderValue();
+  }
+
+  getValue() {
+    return this.value;
+  }
+
+  hasValue(value) {
+    return this.options.some((option) => option.value === String(value));
+  }
+
+  hasOptions() {
+    return this.options.length > 0;
+  }
+
+  setDisabled(disabled) {
+    this.disabled = Boolean(disabled);
+    this.trigger.disabled = this.disabled;
+    if (this.disabled) this.close();
+  }
+
+  renderValue() {
+    const option = this.options.find((item) => item.value === this.value);
+    const placeholder = this.root.dataset.placeholder || '请选择';
+    this.valueNode.textContent = option ? option.label : placeholder;
+    this.valueNode.classList.toggle('is-placeholder', !option);
+  }
+
+  toggle() {
+    if (this.disabled) return;
+    if (this.open) this.close();
+    else this.openPanel();
+  }
+
+  openPanel() {
+    if (this.open || this.disabled) return;
+    this.open = true;
+    this.trigger.setAttribute('aria-expanded', 'true');
+    this.renderPanel();
+  }
+
+  close() {
+    if (!this.open) return;
+    this.open = false;
+    this.trigger.setAttribute('aria-expanded', 'false');
+    this.panel?.remove();
+    this.panel = null;
+  }
+
+  renderPanel() {
+    this.close();
+    this.open = true;
+    this.trigger.setAttribute('aria-expanded', 'true');
+
+    const panel = el('div', 'cselect-panel');
+    panel.addEventListener('click', (event) => event.stopPropagation());
+
+    if (this.searchable) {
+      const search = el('div', 'cselect-search');
+      const input = document.createElement('input');
+      input.type = 'search';
+      input.placeholder = '搜索模型';
+      input.addEventListener('input', () => renderOptions(input.value));
+      search.appendChild(input);
+      panel.appendChild(search);
+      setTimeout(() => input.focus(), 0);
+    }
+
+    const optionsBox = el('div', 'cselect-options');
+    panel.appendChild(optionsBox);
+
+    const renderOptions = (query = '') => {
+      clear(optionsBox);
+      const q = query.trim().toLowerCase();
+      const visible = this.options.filter((option) => {
+        if (!q) return true;
+        const haystack = `${option.label} ${option.description || ''} ${option.searchText || ''}`.toLowerCase();
+        return haystack.includes(q);
+      });
+
+      if (!visible.length) {
+        optionsBox.appendChild(el('div', 'cselect-empty', '没有匹配项'));
+        return;
+      }
+
+      for (const option of visible) {
+        const row = el('div', `cselect-option${option.value === this.value ? ' is-active' : ''}`);
+        row.setAttribute('role', 'option');
+        row.setAttribute('aria-selected', option.value === this.value ? 'true' : 'false');
+        row.appendChild(el('span', '', option.label));
+        if (option.description) row.appendChild(el('span', 'opt-desc', option.description));
+        row.addEventListener('click', () => {
+          this.setValue(option.value);
+          this.close();
+          this.onChange?.(option.value);
+        });
+        optionsBox.appendChild(row);
+      }
+    };
+
+    renderOptions();
+    this.root.appendChild(panel);
+    this.panel = panel;
+  }
+}
+
+/* ========================================================================== */
+/* wiring                                                                     */
+/* ========================================================================== */
 
 function bind() {
-  $('tokenInput').addEventListener('input', updateTokenPreview);
+  // -- navigation
+  for (const button of document.querySelectorAll('.nav-item')) {
+    button.addEventListener('click', () => setView(button.dataset.view));
+  }
+  for (const button of document.querySelectorAll('[data-goto]')) {
+    button.addEventListener('click', () => setView(button.dataset.goto));
+  }
+  window.addEventListener('hashchange', () => {
+    const name = location.hash.replace('#', '');
+    if (name && name !== state.view) setView(name, { push: false });
+  });
 
+  // -- status
+  $('refreshAllBtn').addEventListener('click', async () => {
+    await refreshStatus();
+    await loadModels();
+    toast('已刷新', 'success');
+  });
+  $('statusPill').addEventListener('click', () => setView('overview'));
+
+  // -- channels
+  $('channelSearch').addEventListener('input', () => {
+    state.channelQuery = $('channelSearch').value;
+    renderChannels(activeChannels());
+  });
+  $('channelFilters').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-filter]');
+    if (!button) return;
+    state.channelFilter = button.dataset.filter;
+    for (const chip of $('channelFilters').querySelectorAll('.chip')) {
+      chip.classList.toggle('is-active', chip === button);
+    }
+    renderChannels(activeChannels());
+  });
+  $('createChannelBtn').addEventListener('click', createChannel);
+
+  // -- connect
+  $('connectSearch').addEventListener('input', () => {
+    state.connectQuery = $('connectSearch').value;
+    renderConnectPresets();
+  });
+  $('oauthStartBtn').addEventListener('click', startOauth);
+  $('copyUserCodeBtn').addEventListener('click', async () => {
+    const code = $('connectUserCode').textContent || '';
+    if (!code || code === '—') return;
+    const ok = await copyText(code);
+    toast(ok ? '设备码已复制' : '复制失败', ok ? 'success' : 'error');
+  });
+  $('verifyKeyBtn').addEventListener('click', () => verifyAndAddKey());
+  $('addKeylessBtn').addEventListener('click', addKeylessChannel);
+  $('detectLocalBtn').addEventListener('click', detectLocalService);
+  $('pasteKeyBtn').addEventListener('click', readClipboardIntoField);
+  $('sendSmsBtn').addEventListener('click', () => {
+    const info = connectInfoFor(state.connectSelected);
+    if (info) sendSmsCode(info);
+  });
+  $('submitSmsBtn').addEventListener('click', submitSmsCode);
+  $('connectSmsCode').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') submitSmsCode();
+  });
+  $('openKeyPageBtn').addEventListener('click', () => {
+    const info = connectInfoFor(state.connectSelected);
+    if (!info?.keyUrl) return;
+    window.open(info.keyUrl, '_blank', 'noopener');
+    state.clipboardSignature = '';
+    startClipboardWatch();
+    setConnectResult('已打开官方 Key 页面。登录并创建 Key 后点「复制」，这里会自动填入并校验。', null);
+  });
+  $('autoCaptureInput').addEventListener('change', () => {
+    if (!$('autoCaptureInput').checked) stopClipboardWatch();
+    else if (!$('connectStepKey').hidden) startClipboardWatch();
+  });
+  $('connectKeyInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') verifyAndAddKey();
+  });
+
+  // -- accounts
+  $('tokenInput').addEventListener('input', updateTokenPreview);
   $('pasteBtn').addEventListener('click', async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -1348,7 +2531,6 @@ function bind() {
       toast('浏览器拒绝了剪贴板读取，请手动粘贴', 'warn');
     }
   });
-
   $('clearBtn').addEventListener('click', () => {
     $('tokenInput').value = '';
     $('deviceInput').value = '';
@@ -1356,21 +2538,20 @@ function bind() {
     updateTokenPreview();
     setMsg($('credMsg'), '', '');
   });
-
   $('saveBtn').addEventListener('click', saveCredentials);
   $('loginBtn').addEventListener('click', () => startLogin({ accountId: 'primary' }));
   $('addAccountBtn').addEventListener('click', () => startLogin({ createNew: true }));
+
+  // -- gateway
   $('genKeyBtn').addEventListener('click', () => generateKey());
   $('regenBtn').addEventListener('click', () => generateKey());
   $('startBtn').addEventListener('click', startProxy);
   $('stopBtn').addEventListener('click', stopProxy);
   $('modelsBtn').addEventListener('click', () => loadModels(true));
-
   $('copySnippet').addEventListener('click', async () => {
     const ok = await copyText($('snippetText').textContent);
     toast(ok ? '示例已复制' : '复制失败', ok ? 'success' : 'error');
   });
-
   document.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-copy]');
     if (!button) return;
@@ -1380,6 +2561,21 @@ function bind() {
     const ok = await copyText(text);
     toast(ok ? '已复制到剪贴板' : '复制失败', ok ? 'success' : 'error');
   });
+
+  // -- logs
+  $('logFilters').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-filter]');
+    if (!button) return;
+    state.logFilter = button.dataset.filter;
+    for (const chip of $('logFilters').querySelectorAll('.chip')) {
+      chip.classList.toggle('is-active', chip === button);
+    }
+    renderLogs(state.logs, 'logList', state.logFilter);
+  });
+
+  // -- settings
+  $('saveRoutingBtn').addEventListener('click', saveRouting);
+  $('reloadConfigBtn').addEventListener('click', reloadConfig);
 }
 
 function initSelects() {
@@ -1408,22 +2604,24 @@ async function init() {
   initSelects();
   bind();
   updateTokenPreview();
+
+  const initial = location.hash.replace('#', '');
+  setView(VIEWS.includes(initial) ? initial : 'overview', { push: false });
+
   await refreshStatus();
 
-  if (state.status && (state.status.user || state.status.token?.expiresAt)) {
-    await loadModels();
-  }
-
+  if (isConfigured()) await loadModels();
   await loadLogs();
+
   setInterval(() => {
-    if (!document.hidden) refreshStatus();
+    if (!document.hidden) refreshStatus({ silent: true });
   }, 5000);
   setInterval(() => {
-    if (!document.hidden) loadLogs();
+    if (!document.hidden && (state.view === 'logs' || state.view === 'overview')) loadLogs();
   }, 4000);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
-      refreshStatus();
+      refreshStatus({ silent: true });
       loadLogs();
     }
   });

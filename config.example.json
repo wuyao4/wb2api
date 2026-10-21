@@ -1,50 +1,77 @@
 {
+  "version": 2,
   "server": {
     "host": "127.0.0.1",
     "port": 8787,
     "apiKeys": [
       "sk-wb2api-local"
     ],
-    "requestBodyLimitMb": 128,
     "adminToken": "",
-    "running": false
+    "running": false,
+    "requestBodyLimitMb": 128
   },
-  "upstream": {
-    "baseUrl": "https://www.workbuddy.ai",
-    "accessToken": "",
-    "refreshToken": "",
-    "deviceToken": "",
-    "userId": "",
-    "domain": "www.workbuddy.ai",
-    "product": "SaaS",
-    "client": {
-      "userAgent": "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0",
-      "ideType": "WorkBuddy",
-      "ideName": "WorkBuddy",
-      "ideVersion": "5.8.4",
-      "codebuddyRequest": "1"
-    },
-    "maxConcurrency": 1,
-    "refreshSkewSeconds": 600,
-    "headerTimeoutMs": 120000,
-    "enabled": true,
-    "label": "主账号"
+  "routing": {
+    "defaultModel": "workbuddy/deepseek-v4.1-flash",
+    "aliases": {},
+    "namespace": "auto",
+    "exposeUnprefixed": false
   },
-  "models": {
-    "default": "deepseek-v4.1-flash",
-    "aliases": {
-      "gpt-4o": "deepseek-v4.1-flash",
-      "gpt-4o-mini": "deepseek-v4.1-flash",
-      "gpt-4.1": "deepseek-v4.1-flash",
-      "claude-3-5-sonnet": "deepseek-v4.1-flash",
-      "claude-sonnet-4": "deepseek-v4.1-flash"
-    },
-    "fallback": {},
-    "allowUnknown": true,
-    "cacheTtlSeconds": 600,
-    "contextWindow": {
-      "default": 1000000,
-      "overrides": {}
+  "channels": {
+    "workbuddy": {
+      "type": "workbuddy",
+      "enabled": true,
+      "label": "WorkBuddy",
+      "options": {
+        "baseUrl": "https://www.workbuddy.ai",
+        "domain": "www.workbuddy.ai",
+        "product": "SaaS",
+        "client": {
+          "userAgent": "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0",
+          "ideType": "WorkBuddy",
+          "ideName": "WorkBuddy",
+          "ideVersion": "5.8.4",
+          "codebuddyRequest": "1"
+        },
+        "refreshSkewSeconds": 600,
+        "headerTimeoutMs": 120000
+      },
+      "models": {
+        "default": "deepseek-v4.1-flash",
+        "aliases": {
+          "gpt-4o": "deepseek-v4.1-flash",
+          "gpt-4o-mini": "deepseek-v4.1-flash",
+          "gpt-4.1": "deepseek-v4.1-flash",
+          "claude-3-5-sonnet": "deepseek-v4.1-flash",
+          "claude-sonnet-4": "deepseek-v4.1-flash"
+        },
+        "fallback": {},
+        "allowUnknown": true,
+        "cacheTtlSeconds": 600,
+        "contextWindow": {
+          "default": 1000000,
+          "overrides": {}
+        }
+      },
+      "routing": {
+        "sessionAffinity": true,
+        "affinityTtlMinutes": 60,
+        "maxSessions": 5000,
+        "affinityOnCooldown": "prefer",
+        "failover": true,
+        "defaultAccountConcurrency": 2
+      },
+      "accounts": [
+        {
+          "id": "primary",
+          "label": "主账号",
+          "enabled": true,
+          "maxConcurrency": 1,
+          "accessToken": "",
+          "refreshToken": "",
+          "deviceToken": "",
+          "userId": ""
+        }
+      ]
     }
   },
   "prompt": {
@@ -58,14 +85,5 @@
   },
   "logging": {
     "requests": true
-  },
-  "accounts": [],
-  "routing": {
-    "sessionAffinity": true,
-    "affinityTtlMinutes": 60,
-    "maxSessions": 5000,
-    "affinityOnCooldown": "prefer",
-    "failover": true,
-    "defaultAccountConcurrency": 2
   }
 }
