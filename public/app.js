@@ -46,7 +46,12 @@ const state = {
   testChannelSelect: null,
   testChannel: null,
   testBusy: false,
-  lastTestOutput: ''
+  lastTestOutput: '',
+  poolQuery: '',
+  logQuery: '',
+  modelsLoading: false,
+  commandIndex: 0,
+  commandFiltered: []
 };
 
 /* ========================================================================== */
@@ -224,6 +229,231 @@ function clear(node) {
   if (node) node.replaceChildren();
 }
 
+const PROVIDER_CODES = {
+  workbuddy: 'WB',
+  codebuddy: 'CB',
+  kilo: 'KG',
+  openrouter: 'OR',
+  groq: 'GQ',
+  deepseek: 'DS',
+  gemini: 'GM',
+  siliconflow: 'SF',
+  nvidia: 'NV',
+  cerebras: 'CR',
+  mistral: 'MI',
+  together: 'TG',
+  fireworks: 'FW',
+  xai: 'XA',
+  moonshot: 'MS',
+  zai: 'ZA',
+  minimax: 'MM',
+  'opencode-zen': 'OC',
+  vercel: 'VC',
+  cline: 'CL',
+  qoder: 'QD',
+  'gemini-code-assist': 'GC',
+  trae: 'TR',
+  raccoon: 'RC',
+  zcode: 'ZC',
+  'minimax-code': 'MC',
+  loomy: 'LM',
+  lobsterai: 'LB'
+};
+
+/** A deterministic, readable channel mark (no remote favicons). */
+function providerMark(id, label, size = '') {
+  const key = String(id || label || '?').toLowerCase();
+  let code = PROVIDER_CODES[key];
+  if (!code) {
+    const words = String(label || id || '?').match(/[A-Za-z0-9]+/g);
+    code = words?.length
+      ? words.map((word) => word[0]).join('').slice(0, 2).toUpperCase()
+      : String(label || id || '?').slice(0, 2);
+  }
+  let hash = 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  const node = el('span', `provider-mark${size ? ` ${size}` : ''}`, code);
+  node.style.setProperty('--mark-hue', String(hash % 360));
+  node.title = label || id || '';
+  return node;
+}
+
+function setMobileMenu(open) {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = $('sidebarBackdrop');
+  sidebar?.classList.toggle('is-open', open);
+  if (backdrop) backdrop.hidden = !open;
+  document.body.classList.toggle('menu-open', open);
+}
+
+function openTestModel(model) {
+  if (!model) return;
+  setView('test');
+  state.testChannel = model.channel || '';
+  renderTestModels();
+  if (state.testModelSelect?.hasValue(model.id)) {
+    state.testModelSelect.setValue(model.id);
+  }
+  updateTestModelHint();
+  setTimeout(() => $('testInput')?.focus(), 80);
+}
+
+function commandCatalog() {
+  const running = Boolean(state.status?.running);
+  const commands = [
+    { section: '页面', label: '概览', hint: '网关状态与请求链路', keywords: 'overview home dashboard', run: () => setView('overview') },
+    { section: '页面', label: '渠道', hint: '上游渠道与凭据', keywords: 'channels upstream', run: () => setView('channels') },
+    { section: '页面', label: '连接', hint: 'OAuth 与 API Key', keywords: 'connect oauth key', run: () => setView('connect') },
+    { section: '页面', label: '代理池', hint: '账号、并发与会话', keywords: 'accounts pool', run: () => setView('accounts') },
+    { section: '页面', label: '测试', hint: '选择模型发一轮对话', keywords: 'test playground model', run: () => setView('test') },
+    { section: '页面', label: '日志', hint: '最近请求与错误', keywords: 'logs requests', run: () => setView('logs') },
+    { section: '页面', label: '设置', hint: '模型路由与运行信息', keywords: 'settings routing', run: () => setView('settings') },
+    {
+      section: '操作',
+      label: running ? '更新并应用网关' : '启动网关',
+      hint: running ? '重新校验并应用当前配置' : '校验渠道并开放 /v1',
+      keywords: 'start gateway run',
+      run: startProxy
+    },
+    { section: '操作', label: '刷新状态', hint: '重新读取渠道与账号', keywords: 'refresh reload', run: async () => { await refreshStatus(); await loadModels(true); toast('已刷新', 'success'); } },
+    { section: '操作', label: '添加账号', hint: '打开浏览器授权', keywords: 'account login add', run: addAccountFlow },
+    { section: '操作', label: '连接新渠道', hint: 'OAuth 或 API Key', keywords: 'connect provider', run: () => setView('connect') },
+    { section: '操作', label: '复制 Base URL', hint: state.status?.baseUrl || '网关未启动', keywords: 'copy base url', run: () => copyBaseUrl() },
+    { section: '操作', label: '复制 API Key', hint: state.status?.apiKey ? '复制当前网关密钥' : '尚未生成密钥', keywords: 'copy api key', run: () => copyApiKey() },
+    { section: '操作', label: '重新读取配置', hint: '应用 config.json 变更', keywords: 'reload config', run: reloadConfig }
+  ];
+  if (running) {
+    commands.splice(8, 0, {
+      section: '操作',
+      label: '停止网关',
+      hint: '保留配置，只关闭 /v1',
+      keywords: 'stop gateway halt',
+      run: stopProxy
+    });
+  }
+  return commands;
+}
+
+async function copyBaseUrl() {
+  const value = state.status?.baseUrl || '';
+  if (!value) return toast('网关还没有启动', 'warn');
+  const ok = await copyText(value);
+  toast(ok ? 'Base URL 已复制' : '复制失败', ok ? 'success' : 'error');
+}
+
+async function copyApiKey() {
+  const value = state.status?.apiKey || '';
+  if (!value) return toast('还没有 API Key', 'warn');
+  const ok = await copyText(value);
+  toast(ok ? 'API Key 已复制' : '复制失败', ok ? 'success' : 'error');
+}
+
+function renderCommandResults(query = '') {
+  const box = $('commandResults');
+  if (!box) return;
+  const q = query.trim().toLowerCase();
+  const commands = commandCatalog();
+  const matches = (item) =>
+    !q || `${item.label} ${item.hint} ${item.keywords}`.toLowerCase().includes(q);
+  const views = commands.filter((item) => item.section === '页面' && matches(item));
+  const actions = commands.filter((item) => item.section === '操作' && matches(item));
+  const models =
+    q && state.models.length
+      ? state.models
+          .filter((model) =>
+            `${model.id} ${model.name || ''} ${model.channel_label || ''}`
+              .toLowerCase()
+              .includes(q)
+          )
+          .slice(0, 8)
+      : [];
+
+  const rows = [];
+  for (const item of [...views, ...actions]) rows.push({ ...item, type: 'command' });
+  for (const model of models) {
+    rows.push({
+      type: 'model',
+      section: '模型',
+      label: model.id,
+      hint: `${model.channel_label || model.channel || '渠道'} · ${model.name || '模型'}`,
+      run: () => openTestModel(model)
+    });
+  }
+
+  state.commandFiltered = rows;
+  state.commandIndex = Math.min(state.commandIndex, Math.max(0, rows.length - 1));
+  clear(box);
+
+  if (!rows.length) {
+    box.appendChild(
+      el('div', 'command-empty', q ? '没有匹配的页面、操作或模型' : '没有可执行项')
+    );
+    $('commandHint').textContent = '0 项';
+    return;
+  }
+
+  let lastSection = '';
+  rows.forEach((row, index) => {
+    if (row.section !== lastSection) {
+      box.appendChild(el('div', 'command-section', row.section));
+      lastSection = row.section;
+    }
+    const button = el('button', `command-item${index === state.commandIndex ? ' is-active' : ''}`);
+    button.type = 'button';
+    button.dataset.index = String(index);
+    button.appendChild(el('span', `command-icon${row.type === 'model' ? ' model' : ''}`, row.type === 'model' ? 'M' : row.label.slice(0, 1)));
+    const copy = el('span', 'command-copy');
+    copy.appendChild(el('strong', '', row.label));
+    copy.appendChild(el('span', '', row.hint));
+    button.appendChild(copy);
+    button.addEventListener('mouseenter', () => {
+      state.commandIndex = index;
+      for (const item of box.querySelectorAll('.command-item')) {
+        item.classList.toggle('is-active', Number(item.dataset.index) === index);
+      }
+    });
+    button.addEventListener('click', () => executeCommand(row));
+    box.appendChild(button);
+  });
+  $('commandHint').textContent = `${rows.length} 项`;
+}
+
+function executeCommand(item) {
+  const dialog = $('commandDialog');
+  if (!item) return;
+  if (dialog?.open) dialog.close();
+  Promise.resolve()
+    .then(() => item.run?.())
+    .catch((err) => toast(err.message, 'error'));
+}
+
+function openCommandPalette() {
+  const dialog = $('commandDialog');
+  if (!dialog) return;
+  setMobileMenu(false);
+  if (dialog.open) {
+    $('commandInput')?.focus();
+    return;
+  }
+  state.commandIndex = 0;
+  $('commandInput').value = '';
+  renderCommandResults('');
+  dialog.showModal();
+  setTimeout(() => $('commandInput')?.focus(), 30);
+}
+
+function moveCommand(delta) {
+  const rows = state.commandFiltered;
+  if (!rows.length) return;
+  state.commandIndex = (state.commandIndex + delta + rows.length) % rows.length;
+  const box = $('commandResults');
+  for (const item of box.querySelectorAll('.command-item')) {
+    const active = Number(item.dataset.index) === state.commandIndex;
+    item.classList.toggle('is-active', active);
+    if (active) item.scrollIntoView({ block: 'nearest' });
+  }
+}
+
 /* ---------------------------------------------------------- derived state */
 
 function activeChannels() {
@@ -341,6 +571,7 @@ const VIEWS = ['overview', 'channels', 'connect', 'accounts', 'test', 'logs', 's
 function setView(name, { push = true } = {}) {
   const view = VIEWS.includes(name) ? name : 'overview';
   state.view = view;
+  setMobileMenu(false);
 
   for (const section of document.querySelectorAll('.view')) {
     section.hidden = section.dataset.view !== view;
@@ -406,6 +637,10 @@ function renderStatus() {
   const pill = $('statusPill');
   pill.dataset.state = running ? 'running' : configured ? 'configured' : 'idle';
   $('statusText').textContent = running ? '运行中' : configured ? '已连接 · 未启动' : '未配置';
+  if ($('mobileStatus')) {
+    $('mobileStatus').dataset.state = pill.dataset.state;
+    $('mobileStatusText').textContent = running ? '运行中' : configured ? '未启动' : '未配置';
+  }
   $('navChannelCount').textContent = String(channels.length);
   if ($('navPoolCount')) $('navPoolCount').textContent = String(pool.accounts);
   $('sidebarMeta').textContent = running
@@ -432,7 +667,13 @@ function renderStatus() {
       : '等待账号入池';
   }
   if ($('flowModels')) {
-    $('flowModels').textContent = modelCount ? `${modelCount} 个模型` : '等待模型';
+    $('flowModels').textContent = modelCount
+      ? `${modelCount} 个模型`
+      : configured
+        ? state.modelsLoading
+          ? '读取模型中…'
+          : '渠道已就绪'
+        : '等待模型';
   }
   if ($('flowGateway')) {
     $('flowGateway').textContent = running ? '运行中' : configured ? '待启动' : '未配置';
@@ -818,15 +1059,20 @@ function updateContextDescription() {
 
 async function loadModels(force = false) {
   const button = $('modelsBtn');
+  state.modelsLoading = true;
   setBusy(button, true);
   try {
     const data = await api('/admin/models');
     state.models = Array.isArray(data.data) ? data.data : [];
     renderModels();
+    if ($('flowModels') && state.models.length) {
+      $('flowModels').textContent = `${state.models.length} 个模型`;
+    }
     if (force) toast(`已加载 ${state.models.length} 个模型`, 'success');
   } catch (err) {
     toast(`模型列表加载失败：${err.message}`, 'error');
   } finally {
+    state.modelsLoading = false;
     setBusy(button, false);
     button.disabled = !isConfigured();
   }
@@ -1195,6 +1441,7 @@ function renderChannels(channels) {
 
     const main = el('div', 'channel-main');
     const title = el('div', 'channel-title');
+    title.appendChild(providerMark(channel.id, channel.label, 'xs'));
     title.appendChild(el('strong', '', channel.label || channel.id));
 
     if (channel.id === defaultId) title.appendChild(el('span', 'channel-badge is-default', '默认'));
@@ -1547,7 +1794,10 @@ function renderConnectPresets() {
       const button = el(`button`, `connect-item${preset.id === state.connectSelected ? ' is-active' : ''}${connected ? ' is-connected' : ''}`);
       button.type = 'button';
       button.dataset.preset = preset.id;
-      button.appendChild(el('strong', '', preset.name));
+      const head = el('div', 'connect-item-head');
+      head.appendChild(providerMark(preset.id, preset.name, 'xs'));
+      head.appendChild(el('strong', '', preset.name));
+      button.appendChild(head);
       const label = STRATEGY_LABEL[preset.strategy] || preset.strategy;
       button.appendChild(el('span', preset.strategy === 'oauth' ? 'is-oauth-label' : '', label));
       if (connected) {
@@ -2494,6 +2744,7 @@ function poolGroupHeader(channel, accounts) {
   else if (channel.configured) dot.classList.add('is-on');
   else dot.classList.add('is-warn');
   title.appendChild(dot);
+  title.appendChild(providerMark(channel.id, channel.label, 'xs'));
   title.appendChild(el('strong', '', channel.label || channel.id));
 
   if (channel.id === defaultChannelStatus()?.id) {
@@ -2682,21 +2933,34 @@ function renderPool() {
   if ($('poolChannelCount')) $('poolChannelCount').textContent = String(stats.channels);
   if ($('poolSessions')) $('poolSessions').textContent = String(stats.sessions);
 
-  const rows = all.filter(poolPassesFilter);
+  const query = state.poolQuery.trim().toLowerCase();
+  const rows = all.filter(
+    (account) =>
+      poolPassesFilter(account) &&
+      (!query ||
+        `${accountName(account)} ${account.email || ''} ${account.channelLabel || ''} ${
+          account.id || ''
+        }`
+          .toLowerCase()
+          .includes(query))
+  );
   clear(list);
 
   if (!rows.length) {
+    const hasFilter = Boolean(query) || state.poolFilter !== 'all';
     const empty = el('div', 'empty-state pool-empty');
     empty.appendChild(
-      el('strong', '', all.length ? '当前筛选没有账号' : '代理池还是空的')
+      el('strong', '', all.length ? (hasFilter ? '没有匹配的账号' : '代理池还是空的') : '代理池还是空的')
     );
     empty.appendChild(
-      el('span', '', all.length ? '切换筛选条件，或连接更多渠道。' : '连接一个渠道后，账号会自动出现在这里。')
+      el('span', '', all.length ? (hasFilter ? '换一个关键词或筛选条件。' : '连接一个渠道后，账号会自动出现在这里。') : '连接一个渠道后，账号会自动出现在这里。')
     );
-    const connect = el('button', 'btn secondary mini', '去连接渠道');
-    connect.type = 'button';
-    connect.addEventListener('click', () => setView('connect'));
-    empty.appendChild(connect);
+    if (!all.length) {
+      const connect = el('button', 'btn secondary mini', '去连接渠道');
+      connect.type = 'button';
+      connect.addEventListener('click', () => setView('connect'));
+      empty.appendChild(connect);
+    }
     list.appendChild(empty);
     return;
   }
@@ -3261,15 +3525,26 @@ function buildLogRow(row) {
 function renderLogs(logs, targetId, filter) {
   const list = $(targetId);
   if (!list) return;
-  const rows = logs.filter((row) => logPassesFilter(row, filter || 'all'));
+  const query =
+    targetId === 'logList' ? state.logQuery.trim().toLowerCase() : '';
+  const rows = logs.filter(
+    (row) =>
+      logPassesFilter(row, filter || 'all') &&
+      (!query ||
+        `${row.model || ''} ${row.channel || ''} ${row.channelLabel || ''} ${row.error || ''}`
+          .toLowerCase()
+          .includes(query))
+  );
   clear(list);
 
   if (!rows.length) {
-    const empty = logs.length
-      ? '没有符合条件的记录'
-      : state.status?.running
-        ? '网关运行中，暂无请求。调用一次 API 后会显示在这里。'
-        : '暂无请求，启动网关后在这里查看调用记录';
+    const empty = query
+      ? '没有匹配的请求，换个关键词试试。'
+      : logs.length
+        ? '没有符合条件的记录'
+        : state.status?.running
+          ? '网关运行中，暂无请求。调用一次 API 后会显示在这里。'
+          : '暂无请求，启动网关后在这里查看调用记录';
     list.appendChild(el('div', 'empty-state', empty));
     return;
   }
@@ -3293,6 +3568,11 @@ async function loadLogs() {
     $('recentMeta').textContent = logs.length
       ? `${logs.length} 条记录 · 最近 ${formatTime(logs[0].at)}`
       : '暂无请求';
+    if ($('logMeta')) {
+      $('logMeta').textContent = logs.length
+        ? `${logs.length} 条记录 · 最近 ${formatTime(logs[0].at)}`
+        : '暂无记录';
+    }
   } catch {
     /* silent: status polling surfaces connection problems */
   }
@@ -3576,8 +3856,45 @@ class CustomSelect {
 function bind() {
   // -- navigation
   for (const button of document.querySelectorAll('.nav-item')) {
-    button.addEventListener('click', () => setView(button.dataset.view));
+    button.addEventListener('click', () => {
+      setView(button.dataset.view);
+      setMobileMenu(false);
+    });
   }
+  $('menuBtn').addEventListener('click', () => setMobileMenu(true));
+  $('sidebarClose').addEventListener('click', () => setMobileMenu(false));
+  $('sidebarBackdrop').addEventListener('click', () => setMobileMenu(false));
+  $('mobileStatus').addEventListener('click', () => setView('overview'));
+
+  // -- command palette
+  $('commandBtn').addEventListener('click', openCommandPalette);
+  $('mobileCommandBtn').addEventListener('click', openCommandPalette);
+  $('commandInput').addEventListener('input', () => {
+    state.commandIndex = 0;
+    renderCommandResults($('commandInput').value);
+  });
+  $('commandInput').addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveCommand(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveCommand(-1);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      executeCommand(state.commandFiltered[state.commandIndex]);
+    }
+  });
+  $('commandDialog').addEventListener('click', (event) => {
+    if (event.target === $('commandDialog')) $('commandDialog').close();
+  });
+  document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      openCommandPalette();
+    }
+    if (event.key === 'Escape') setMobileMenu(false);
+  });
   for (const button of document.querySelectorAll('[data-goto]')) {
     button.addEventListener('click', () => setView(button.dataset.goto));
   }
@@ -3688,6 +4005,11 @@ function bind() {
     });
   }
 
+  $('poolSearch').addEventListener('input', () => {
+    state.poolQuery = $('poolSearch').value;
+    renderPool();
+  });
+
   const editDialog = $('editDialog');
   $('editCancel').addEventListener('click', closeEditor);
   if (editDialog) {
@@ -3753,6 +4075,11 @@ function bind() {
       chip.classList.toggle('is-active', chip === button);
     }
     renderLogs(state.logs, 'logList', state.logFilter);
+  });
+
+  $('logSearch').addEventListener('input', () => {
+    state.logQuery = $('logSearch').value;
+    renderLogs(state.logs, 'logList', state.logFilter || 'all');
   });
 
   // -- settings

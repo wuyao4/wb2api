@@ -14,6 +14,7 @@
 
     <div class="app">
       <aside class="sidebar">
+        <button class="sidebar-close" id="sidebarClose" type="button" aria-label="关闭菜单">×</button>
         <div class="brand">
           <div class="logo" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -27,6 +28,14 @@
             <p>多渠道代理池</p>
           </div>
         </div>
+
+        <button class="command-trigger" id="commandBtn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+          </svg>
+          <span>搜索或跳转</span>
+          <kbd>⌘K</kbd>
+        </button>
 
         <nav class="nav" id="nav" aria-label="主导航">
           <button class="nav-item" type="button" data-view="overview" aria-current="page">
@@ -89,6 +98,27 @@
       </aside>
 
       <main class="main" id="main">
+        <header class="mobile-bar">
+          <button class="icon-btn" id="menuBtn" type="button" aria-label="打开菜单">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            </svg>
+          </button>
+          <div class="mobile-brand">
+            <span class="mobile-mark">B2</span>
+            <strong>Buddy2API</strong>
+          </div>
+          <button class="mobile-status" id="mobileStatus" data-state="idle" type="button">
+            <span class="pill-dot"></span>
+            <span id="mobileStatusText">未配置</span>
+          </button>
+          <button class="icon-btn" id="mobileCommandBtn" type="button" aria-label="搜索或跳转">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+            </svg>
+          </button>
+        </header>
+
         <!-- ============================ 概览 ============================ -->
         <section class="view" id="view-overview" data-view="overview">
           <header class="view-head">
@@ -626,13 +656,21 @@
                 <h3>账号池</h3>
                 <p id="accountFoot">同一会话会优先使用同一个账号</p>
               </div>
+            </header>
+            <div class="list-toolbar">
+              <div class="search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+                </svg>
+                <input id="poolSearch" type="search" placeholder="搜索账号、邮箱或渠道" autocomplete="off" spellcheck="false" />
+              </div>
               <div class="filter-chips" id="poolFilters" role="group" aria-label="筛选账号">
                 <button class="chip is-active" type="button" data-pool-filter="all">全部</button>
                 <button class="chip" type="button" data-pool-filter="active">启用</button>
                 <button class="chip" type="button" data-pool-filter="oauth">账号渠道</button>
                 <button class="chip" type="button" data-pool-filter="key">API Key</button>
               </div>
-            </header>
+            </div>
             <div class="pool-groups" id="accountList">
               <div class="empty-state">暂无账号。连接一个渠道后，账号会自动出现在这里。</div>
             </div>
@@ -779,6 +817,16 @@
             </div>
           </header>
 
+          <div class="list-toolbar">
+            <div class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+              </svg>
+              <input id="logSearch" type="search" placeholder="搜索模型、渠道或错误" autocomplete="off" spellcheck="false" />
+            </div>
+            <span class="toolbar-note" id="logMeta">最近 60 条</span>
+          </div>
+
           <section class="card card-flush">
             <div class="log-head">
               <span>时间</span>
@@ -881,6 +929,26 @@
         </section>
       </main>
     </div>
+
+    <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
+
+    <dialog class="command-dialog" id="commandDialog">
+      <div class="command-box">
+        <div class="command-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+          </svg>
+          <input id="commandInput" type="search" placeholder="搜索页面、操作或模型…" autocomplete="off" spellcheck="false" />
+          <kbd>Esc</kbd>
+        </div>
+        <div class="command-results" id="commandResults"></div>
+        <footer class="command-foot">
+          <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+          <span><kbd>Enter</kbd> 执行</span>
+          <span id="commandHint">输入关键词过滤</span>
+        </footer>
+      </div>
+    </dialog>
 
     <dialog class="modal" id="editDialog">
       <div class="modal-card">
